@@ -1,0 +1,16 @@
+
+BIP39
+Base58
+Base58Check
+Base_58
+Base64
+Base32
+Base16 (Hexadecimal)
+Base85
+Ascii85
+Base36
+Bech32
+Bech32m
+SS58
+CB58
+(WIF)
