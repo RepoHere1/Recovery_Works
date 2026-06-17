@@ -28,7 +28,7 @@ class RecoveryWorksGUI:
         self.top_frame = tk.LabelFrame(root, text="⚙️ Scan Engine Configuration Panel", font=("Segoe UI", 10, "bold"), padx=10, pady=5)
         self.top_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # RESTORED INTERACTIVE INTERFACE BUTTONS
+        # INTERACTIVE INTERFACE BUTTONS
         self.btn_load = ttk.Button(self.top_frame, text="📂 Load Scan File", command=self.start_parse_thread)
         self.btn_load.grid(row=0, column=0, padx=4, pady=5)
 
@@ -124,9 +124,8 @@ class RecoveryWorksGUI:
                 found_count += 1
             
             messagebox.showinfo("Scan Complete", f"Completed scanning {target_path}.\nAdded {found_count} secret lines to master log file.")
-            if os.path.exists(self.output_file):
-                self.active_file = self.output_file
-                self.trigger_reparse()
+            self.active_file = self.output_file
+            self.trigger_reparse()
         except Exception as e:
             print(f"Error executing scan: {e}")
 
@@ -180,10 +179,17 @@ class RecoveryWorksGUI:
                     continue
                 try:
                     data = json.loads(cleaned_line)
-                    if data.get("Type") == "CRAWL_HEARTBEAT":
+                    
+                    # Track crawl heartbeats from your automated crawler logs
+                    if data.get("Type") in ["CRAWL_HEARTBEAT", "COOLDOWN_PULSE"]:
                         repos += 1
                         continue
                     
+                    # FIX: Explicitly evaluate if the line contains core secret match details.
+                    # This safely filters out custom status headers or broken telemetry rows.
+                    if "DetectorName" not in data and "SourceMetadata" not in data:
+                        continue
+
                     is_verified = data.get("Verified", False) == True or str(data.get("Verified")).lower() == "true"
                     detector_name = data.get("DetectorName", "Custom Rule Check")
                     raw_key = data.get('Raw', data.get('Redacted', 'No Raw Decoded Content Blocks Available'))
@@ -211,10 +217,12 @@ class RecoveryWorksGUI:
                     metadata_data = source_metadata.get('Data', {})
                     git_meta = metadata_data.get('Git', {})
                     github_meta = metadata_data.get('Github', {})
+                    filesystem_meta = metadata_data.get('Filesystem', {})
 
-                    repo_url = git_meta.get('Url') or github_meta.get('repository') or github_meta.get('link') or 'Missing File Path Target'
-                    filename = git_meta.get('File') or github_meta.get('file') or 'Unknown Code Block File'
-                    line_num = git_meta.get('Line') or github_meta.get('line') or '?'
+                    # Resolve individual metadata items across file and crawler formats
+                    repo_url = git_meta.get('Url') or github_meta.get('repository') or github_meta.get('link') or filesystem_meta.get('file') or target_path or 'Local Target Location'
+                    filename = git_meta.get('File') or github_meta.get('file') or filesystem_meta.get('file') or 'Local Asset Target'
+                    line_num = git_meta.get('Line') or github_meta.get('line') or filesystem_meta.get('line') or '?'
 
                     print(f"[{data.get('Time', 'Active')}] MATCH: {detector_name} | Key/Address: {raw_key} | Source: {repo_url}", flush=True)
 
