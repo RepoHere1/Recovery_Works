@@ -1,273 +1,1276 @@
-﻿import tkinter as tk
+#!/usr/bin/env python3
+"""
+Recovery Works - Private Key Scanner & Multi-Chain Balance Checker
+Scans folders for BIP39 mnemonics, PEM keys, WIF keys, raw hex keys,
+derives addresses for all major blockchains, checks balances,
+and persists results in .jsonl format for zero-RAM streaming.
+"""
+
+import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import json
 import threading
+import queue
 import os
-import subprocess
+import re
+import json
+import time
+import hashlib
+import struct
+import base64
+from datetime import datetime
+from pathlib import Path
+from collections import OrderedDict
+from typing import Optional
 
-class RecoveryWorksGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("LeakHound & RecoveryWorks Master Management Dashboard")
-        self.root.geometry("1260x880")
-        self.root.configure(bg="#f0f0f0")
+import requests
+from bip_utils import (
+    Bip39SeedGenerator, Bip39MnemonicValidator, Bip39MnemonicGenerator,
+    Bip44, Bip44Coins, Bip49, Bip49Coins, Bip84, Bip84Coins,
+    Bip32Slip10Ed25519, Bip32Secp256k1,
+    Bip44Changes, Bip44Levels
+)
+from mnemonic import Mnemonic
+import base58
+from solders.keypair import Keypair as SolKeypair
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-        # Storage absolute file tracking paths
-        self.output_file = "C:\\Users\\Taylor\\Desktop\\infinite_github_scan.json"
-        self.balance_file = "C:\\Users\\Taylor\\Desktop\\positive_balances.json"
-        self.stats_file = "C:\\Users\\Taylor\\Desktop\\all_time_stats.json"
-        self.trufflehog_exe = "C:\\Users\\Taylor\\GIT_repos\\trufflehog\\scripts\\bin\\First_Truffle\\trufflehog.exe"
-        self.config_yaml = "C:\\Users\\Taylor\\GIT_repos\\trufflehog\\scripts\\bin\\First_Truffle\\config.yaml"
+_ = Bip44Levels, Bip44Changes
 
-        # Initialize persistent counters
-        self.all_time_funded = 0
-        self.all_time_empty = 0
-        self.load_persistent_stats()
+# ═══════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
 
-        # Config Panel Container Layout
-        self.top_frame = tk.LabelFrame(root, text="⚙️ Scan Engine Configuration Panel", font=("Segoe UI", 10, "bold"), padx=10, pady=5)
-        self.top_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        # INTERACTIVE INTERFACE BUTTONS
-        self.btn_load = ttk.Button(self.top_frame, text="📂 Load Scan File", command=self.start_parse_thread)
-        self.btn_load.grid(row=0, column=0, padx=4, pady=5)
+SCANNED_JSONL = "scanned_records.jsonl"
+BALANCE_JSONL = "balance_records.jsonl"
 
-        self.btn_folder = ttk.Button(self.top_frame, text="📁 Pick & Scan Folder", command=self.pick_and_scan_folder)
-        self.btn_folder.grid(row=0, column=1, padx=4, pady=5)
+RPC_ENDPOINTS = OrderedDict([
+    ("Ethereum",   "https://cloudflare-eth.com"),
+    ("BSC",        "https://bsc-dataseed.binance.org"),
+    ("Polygon",    "https://polygon-rpc.com"),
+    ("Arbitrum",   "https://arb1.arbitrum.io/rpc"),
+    ("Optimism",   "https://mainnet.optimism.io"),
+    ("Base",       "https://mainnet.base.org"),
+    ("Avalanche",  "https://api.avax.network/ext/bc/C/rpc"),
+    ("zkSync",     "https://mainnet.era.zksync.io"),
+])
 
-        self.btn_view_bal = ttk.Button(self.top_frame, text="💰 View Funded Wallets", command=self.view_funded_wallets)
-        self.btn_view_bal.grid(row=0, column=2, padx=4, pady=5)
+SOLANA_RPC = "https://api.mainnet-beta.solana.com"
+BTC_API = "https://blockchain.info/balance?active="
 
-        tk.Label(self.top_frame, text="Local Path:", font=("Segoe UI", 9)).grid(row=0, column=3, padx=2)
-        self.ent_path = ttk.Entry(self.top_frame, width=12)
-        self.ent_path.insert(0, "C:\\")
-        self.ent_path.grid(row=0, column=4, padx=4)
+MNEMONIC_CHECK = Mnemonic("english")
+BIP39_WORDS_SET = set(Mnemonic("english").wordlist)
 
-        # DROP-DOWN CONFIGURATION FILTERS
-        tk.Label(self.top_frame, text="Filter:", font=("Segoe UI", 9)).grid(row=0, column=5, padx=2)
-        self.filter_var = tk.StringVar(value="All Data")
-        self.filter_combo = ttk.Combobox(self.top_frame, textvariable=self.filter_var, values=["All Data", "Verified Keys Only", "BIP39 Mnemonic Only"], state="readonly", width=14)
-        self.filter_combo.grid(row=0, column=6, padx=4)
-        self.filter_combo.bind("<<ComboboxSelected>>", lambda e: self.trigger_reparse())
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+TEXT_EXTENSIONS = {
+    ".txt", ".md", ".cfg", ".conf", ".ini", ".env", ".json",
+    ".yml", ".yaml", ".xml", ".csv", ".log", ".dat", ".wallet",
+    ".key", ".pem", ".p12", ".pfx", ".asc", ".gpg", ".bak",
+    ".old", ".secret", ".mnemonic", ".phrase", ".seed", ".pass",
+}
+BINARY_EXTENSIONS = {".pyc", ".exe", ".dll", ".so", ".dylib", ".zip", ".gz",
+                     ".tar", ".rar", ".7z", ".jpg", ".png", ".gif", ".mp3",
+                     ".mp4", ".avi", ".pdf", ".doc", ".docx", ".xls", ".xlsx"}
 
-        self.balance_filter_var = tk.BooleanVar(value=False)
-        self.chk_balance = tk.Checkbutton(self.top_frame, text="💰 Bal > $0.01", variable=self.balance_filter_var, font=("Segoe UI", 9, "bold"), fg="#0055ff", command=self.trigger_reparse)
-        self.chk_balance.grid(row=0, column=7, padx=6)
-        
-        # ALL-TIME METRICS DISPLAY BANNER
-        self.lbl_all_time = tk.Label(root, text=f"♾️ All-Time Funded Wallets: {self.all_time_funded}   |   ♾️ All-Time Empty Found: {self.all_time_empty}", font=("Segoe UI", 10, "bold"), fg="#0055ff", bg="#e6f2ff", bd=1, relief=tk.SOLID, pady=4)
-        self.lbl_all_time.pack(fill=tk.X, padx=10, pady=2)
+# ═══════════════════════════════════════════════════════════════
+# JSONL STREAMING STORE
+# ═══════════════════════════════════════════════════════════════
 
-        # Active Live Session Metrics Counter Status Strip
-        self.lbl_stats = tk.Label(root, text="🔢 Scans Checked: 0   |   🟢 Verified Secret Leaks: 0   |   🚨 Total Dashboard Alerts: 0", font=("Segoe UI", 11, "bold"), fg="#006400", bg="#e6f2e6", bd=1, relief=tk.SOLID, pady=4)
-        self.lbl_stats.pack(fill=tk.X, padx=10, pady=2)
+_jsonl_lock = threading.Lock()
 
-        # Split Bounding Window Frames
-        self.main_split = tk.PanedWindow(root, orient=tk.VERTICAL, sashwidth=6, bg="#dcdcdc")
-        self.main_split.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-
-        # Notification Alerts view display pane (Newest stays on top)
-        self.alert_panel = tk.LabelFrame(self.main_split, text="🚨 Real-Time Matches & Verification Flags (Newest Entries Remain on Top)", font=("Segoe UI", 10, "bold"), fg="#cc0000")
-        self.txt_alerts = tk.Text(self.alert_panel, font=("Consolas", 10), wrap=tk.WORD, height=8, bg="#fafafa")
-        self.txt_alerts.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.main_split.add(self.alert_panel)
-
-        # Master JSON Trace log file window pane
-        self.payload_panel = tk.LabelFrame(self.main_split, text="📋 Full Raw Decoded JSON Payload & Stored Configuration Data Logs (Newest on Top)", font=("Segoe UI", 10, "bold"), fg="#0055ff")
-        self.txt_master = tk.Text(self.payload_panel, font=("Consolas", 10), wrap=tk.WORD, bg="#ffffff")
-        self.txt_master.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.main_split.add(self.payload_panel)
-
-        self.active_file = None
-
-    def load_persistent_stats(self):
-        if os.path.exists(self.stats_file):
-            try:
-                with open(self.stats_file, "r") as f:
-                    stats = json.load(f)
-                    self.all_time_funded = stats.get("all_time_funded", 0)
-                    self.all_time_empty = stats.get("all_time_empty", 0)
-            except Exception:
-                pass
-
-    def save_persistent_stats(self):
+def jsonl_append(filepath: str, record: dict):
+    with _jsonl_lock:
         try:
-            with open(self.stats_file, "w") as f:
-                json.dump({"all_time_funded": self.all_time_funded, "all_time_empty": self.all_time_empty}, f)
-            self.lbl_all_time.config(text=f"♾️ All-Time Funded Wallets: {self.all_time_funded}   |   ♾️ All-Time Empty Found: {self.all_time_empty}")
+            record["_ts"] = datetime.utcnow().isoformat()
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, default=str) + "\n")
         except Exception:
             pass
-    def pick_and_scan_folder(self):
-        folder_selected = filedialog.askdirectory()
-        if folder_selected:
-            target_path = os.path.normpath(folder_selected)
-            self.ent_path.delete(0, tk.END)
-            self.ent_path.insert(0, target_path)
-            threading.Thread(target=self.execute_filesystem_scan, args=(target_path,), daemon=True).start()
 
-    def execute_filesystem_scan(self, target_path):
-        self.txt_alerts.insert("1.0", f"[INFO] Starting Filesystem Scan on target path: {target_path}\n")
+def jsonl_read_all(filepath: str):
+    if not os.path.exists(filepath):
+        return []
+    results = []
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        results.append(json.loads(line))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return results
+
+# ═══════════════════════════════════════════════════════════════
+# KEY DETECTION
+# ═══════════════════════════════════════════════════════════════
+
+def is_text_file(filepath: str) -> bool:
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in TEXT_EXTENSIONS:
+        return True
+    if ext in BINARY_EXTENSIONS:
+        return False
+    try:
+        with open(filepath, "rb") as f:
+            chunk = f.read(8192)
+        return not bool(chunk.translate(None, bytes(range(32, 127)) + b"\n\r\t\f"))
+    except Exception:
+        return False
+
+def detect_bip39(text: str):
+    words = text.strip().split()
+    if len(words) < 12 or len(words) > 48:
+        return None
+    valid_words = [w.lower() for w in words if w.lower() in BIP39_WORDS_SET]
+    if len(valid_words) in (12, 15, 18, 21, 24) and len(valid_words) == len(words):
+        phrase = " ".join(valid_words)
+        if MNEMONIC_CHECK.check(phrase):
+            return phrase
+    return None
+
+def detect_bip39_in_text(text: str):
+    lines = text.replace("\r\n", "\n").split("\n")
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        result = detect_bip39(stripped)
+        if result:
+            return result
+        chunks = re.split(r'[;,:|"\'{}\[\]()=]+', stripped)
+        for chunk in chunks:
+            chunk = chunk.strip().strip('"').strip("'")
+            result = detect_bip39(chunk)
+            if result:
+                return result
+    return None
+
+def detect_pem_keys(text: str):
+    pem_regex = re.compile(
+        r'-----BEGIN\s+(?:RSA\s+)?(?:EC\s+)?PRIVATE\s+KEY-----'
+        r'.*?'
+        r'-----END\s+(?:RSA\s+)?(?:EC\s+)?PRIVATE\s+KEY-----',
+        re.DOTALL
+    )
+    matches = []
+    for m in pem_regex.finditer(text):
+        pem_data = m.group(0)
         try:
-            cmd = [self.trufflehog_exe, "filesystem", target_path, "--json"]
-            if os.path.exists(self.config_yaml):
-                cmd.append(f"--config={self.config_yaml}")
+            key = serialization.load_pem_private_key(
+                pem_data.encode("utf-8"), password=None, backend=default_backend()
+            )
+            if isinstance(key, ec.EllipticCurvePrivateKey):
+                private_bytes = key.private_numbers().private_value.to_bytes(32, 'big')
+                matches.append(("PEM-EC", private_bytes))
+            elif isinstance(key, rsa.RSAPrivateKey):
+                private_bytes = key.private_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption()
+                )
+                if private_bytes:
+                    matches.append(("PEM-RSA", private_bytes))
+        except Exception:
+            pass
+    return matches
 
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            stdout, stderr = process.communicate()
+def detect_wif(text: str):
+    wif_regex = re.compile(r'\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\b')
+    matches = []
+    for m in wif_regex.finditer(text):
+        wif = m.group(0)
+        try:
+            decoded = base58.b58decode_check(wif)
+            if len(decoded) == 33 and decoded[0] in (0x80, 0xef):
+                private_bytes = decoded[1:]
+                matches.append(("WIF", private_bytes))
+            elif len(decoded) == 34 and decoded[0] in (0x80, 0xef):
+                private_bytes = decoded[1:33]
+                matches.append(("WIF-Compressed", private_bytes))
+        except Exception:
+            pass
+    return matches
 
-            found_count = 0
-            for line in stdout.splitlines():
-                if not line.strip():
-                    continue
-                with open(self.output_file, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-                found_count += 1
-            
-            messagebox.showinfo("Scan Complete", f"Completed scanning {target_path}.\nAdded {found_count} secret lines to master log file.")
-            self.active_file = self.output_file
-            self.trigger_reparse()
-        except Exception as e:
-            print(f"Error executing scan: {e}")
+def detect_raw_hex_keys(text: str):
+    hex_regex = re.compile(r'\b(?:0x)?([0-9a-fA-F]{64})\b')
+    matches = []
+    seen = set()
+    for m in hex_regex.finditer(text):
+        hex_val = m.group(1) if m.group(1) else m.group(0).replace("0x", "")
+        if hex_val not in seen and len(hex_val) == 64:
+            seen.add(hex_val)
+            try:
+                private_bytes = bytes.fromhex(hex_val)
+                matches.append(("RAW-HEX", private_bytes))
+            except Exception:
+                pass
+    return matches
 
-    def view_funded_wallets(self):
-        if not os.path.exists(self.balance_file) or os.path.getsize(self.balance_file) == 0:
-            messagebox.showinfo("Fund Viewer", "No funded balance records matched yet. Keep crawling!")
-            return
-        
-        view_win = tk.Toplevel(self.root)
-        view_win.title("💰 Permanent Funded Wallet Ledger ($>0.01)")
-        view_win.geometry("800x500")
-        
-        txt_area = tk.Text(view_win, font=("Consolas", 10), wrap=tk.WORD)
-        txt_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        lines = []
-        with open(self.balance_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    lines.append(line.strip())
-        lines.reverse()
-        txt_area.insert(tk.END, "\n\n".join(lines))
+def detect_solana_keypair_json(text: str):
+    sol_regex = re.compile(
+        r'\[\s*(\d{1,3}\s*,\s*){63}\d{1,3}\s*\]'
+    )
+    for m in sol_regex.finditer(text):
+        try:
+            arr = json.loads(m.group(0))
+            if len(arr) == 64 and all(0 <= b < 256 for b in arr):
+                private_bytes = bytes(arr[:32])
+                return ("SOLANA-JSON", private_bytes)
+        except Exception:
+            pass
+    return None
 
-    def start_parse_thread(self):
-        file_path = filedialog.askopenfilename(filetypes=[("JSON Logs", "*.json")])
-        if file_path:
-            self.active_file = file_path
-            self.trigger_reparse()
+def detect_solana_base58(text: str):
+    b58_regex = re.compile(r'\b([1-9A-HJ-NP-Za-km-z]{87,88})\b')
+    for m in b58_regex.finditer(text):
+        candidate = m.group(1)
+        try:
+            decoded = base58.b58decode(candidate)
+            if len(decoded) == 64:
+                return ("SOLANA-B58", bytes(decoded[:32]))
+            if len(decoded) == 32:
+                return ("SOLANA-B58", bytes(decoded))
+        except Exception:
+            pass
+    return None
 
-    def trigger_reparse(self):
-        if not self.active_file:
-            return
-        self.txt_alerts.delete("1.0", tk.END)
-        self.txt_master.delete("1.0", tk.END)
-        threading.Thread(target=self.stream_json_file, args=(self.active_file,), daemon=True).start()
+def detect_eth_keystore(text: str):
+    try:
+        data = json.loads(text)
+        if all(k in data for k in ("crypto", "address", "version")):
+            return ("ETH-KEYSTORE", data)
+    except Exception:
+        pass
+    return None
 
-    def stream_json_file(self, file_path):
-        repos = 0
-        verified_count = 0
-        total_alerts = 0
-        filter_mode = self.filter_var.get()
-        filter_balance = self.balance_filter_var.get()
-        
-        temporary_master_buffer = []
-        temporary_alert_buffer = []
+def detect_ssh_private_keys(text: str):
+    ssh_regex = re.compile(
+        r'-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----'
+        r'.*?'
+        r'-----END\s+OPENSSH\s+PRIVATE\s+KEY-----',
+        re.DOTALL
+    )
+    for m in ssh_regex.finditer(text):
+        return ("SSH", m.group(0))
+    return None
 
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                cleaned_line = line.strip()
-                if not cleaned_line:
-                    continue
+def detect_pgp_private_keys(text: str):
+    pgp_regex = re.compile(
+        r'-----BEGIN\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----'
+        r'.*?'
+        r'-----END\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----',
+        re.DOTALL
+    )
+    for m in pgp_regex.finditer(text):
+        return ("PGP", m.group(0))
+    return None
+
+def detect_bip38(text: str):
+    bip38_regex = re.compile(r'\b6P[1-9A-HJ-NP-Za-km-z]{56,58}\b')
+    for m in bip38_regex.finditer(text):
+        return ("BIP38-Encrypted", m.group(0))
+    return None
+
+def detect_base64_private_keys(text: str):
+    base64_regex = re.compile(r'(?:[A-Za-z0-9+/]{40,}={0,2})')
+    candidates = []
+    seen = set()
+    for m in base64_regex.finditer(text):
+        candidate = m.group(0)
+        if len(candidate) < 40 or len(candidate) > 88:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            decoded = base64.b64decode(candidate)
+            if len(decoded) == 32:
+                candidates.append(("BASE64-PK", decoded))
+            elif len(decoded) == 48 or len(decoded) == 64:
+                candidates.append(("BASE64-KEY", decoded))
+        except Exception:
+            pass
+    return candidates
+
+def detect_named_private_keys(text: str):
+    patterns = [
+        (r'["\']?(?:private_key|secret_key|privatekey|secret)["\']?\s*[:=]\s*["\']([A-Za-z0-9+/=]{40,})["\']', "NAMED-B64"),
+        (r'["\']?(?:private_key|secret_key|privatekey)["\']?\s*[:=]\s*["\']?(0x[a-fA-F0-9]{64})["\']?', "NAMED-HEX"),
+        (r'["\']?(?:mnemonic|seed_phrase|recovery_phrase)["\']?\s*[:=]\s*["\'](.+?)["\']', "NAMED-PHRASE"),
+        (r'["\']?(?:wallet|wif|private.*key)["\']?\s*[:=]\s*["\']?([5KL][1-9A-HJ-NP-Za-km-z]{50,51})["\']?', "NAMED-WIF"),
+    ]
+    results = []
+    for pat, label in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            val = m.group(1).strip()
+            if len(val) > 8:
+                results.append((label, val))
+    return results
+
+def scan_file_for_keys(filepath: str):
+    try:
+        size = os.path.getsize(filepath)
+        if size > MAX_FILE_SIZE or size == 0:
+            return []
+        if not is_text_file(filepath):
+            return []
+    except Exception:
+        return []
+
+    results = []
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception:
+        try:
+            with open(filepath, "r", encoding="latin-1") as f:
+                text = f.read()
+        except Exception:
+            return []
+
+    bip39 = detect_bip39_in_text(text)
+    if bip39:
+        results.append(("BIP39", bip39))
+
+    pem_matches = detect_pem_keys(text)
+    results.extend(pem_matches)
+
+    wif_matches = detect_wif(text)
+    results.extend(wif_matches)
+
+    hex_matches = detect_raw_hex_keys(text)
+    results.extend(hex_matches)
+
+    sol_json = detect_solana_keypair_json(text)
+    if sol_json:
+        results.append(sol_json)
+
+    sol_b58 = detect_solana_base58(text)
+    if sol_b58:
+        results.append(sol_b58)
+
+    eth_ks = detect_eth_keystore(text)
+    if eth_ks:
+        results.append(eth_ks)
+
+    ssh_key = detect_ssh_private_keys(text)
+    if ssh_key:
+        results.append(ssh_key)
+
+    pgp_key = detect_pgp_private_keys(text)
+    if pgp_key:
+        results.append(pgp_key)
+
+    bip38 = detect_bip38(text)
+    if bip38:
+        results.append(bip38)
+
+    b64_keys = detect_base64_private_keys(text)
+    results.extend(b64_keys)
+
+    named_keys = detect_named_private_keys(text)
+    results.extend(named_keys)
+
+    return results
+
+# ═══════════════════════════════════════════════════════════════
+# ADDRESS DERIVATION
+# ═══════════════════════════════════════════════════════════════
+
+def _validate_private_key(b: bytes) -> bool:
+    return len(b) > 0 and any(x != 0 for x in b)
+
+def private_key_to_eth_address(private_bytes: bytes) -> str:
+    if not _validate_private_key(private_bytes):
+        return "?"
+    try:
+        from eth_keys import keys
+        pk = keys.PrivateKey(private_bytes)
+        return pk.public_key.to_checksum_address()
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    try:
+        priv_hex = private_bytes.hex().zfill(64)
+        pk_key = Bip32Secp256k1.FromSeed(bytes.fromhex(priv_hex))
+        pub_key_bytes = pk_key.PrivateKey().Raw().ToBytes()[1:]
+        keccak256 = hashlib.sha3_256(pub_key_bytes).digest()
+        eth_addr = "0x" + keccak256[-20:].hex()
+        return eth_addr
+    except Exception:
+        return "?"
+
+def private_key_to_btc_addresses(private_bytes: bytes):
+    if not _validate_private_key(private_bytes):
+        return {"legacy": "?", "segwit": "?", "native_segwit": "?"}
+    from bitcoinlib.keys import Key, Address
+    try:
+        k = Key(import_key=private_bytes.hex()[:64])
+        ph = k.public_hex
+        def clean(a): return str(a).split("address=")[1].rstrip(")>") if "address=" in str(a) else str(a)
+        return {
+            "legacy": clean(Address(ph, script_type='p2pkh')),
+            "segwit": clean(Address(ph, script_type='p2sh')),
+            "native_segwit": clean(Address(ph, script_type='p2wpkh')),
+        }
+    except ImportError:
+        return {"legacy": "?", "segwit": "?", "native_segwit": "?"}
+    except Exception:
+        return {"legacy": "?", "segwit": "?", "native_segwit": "?"}
+
+def private_key_to_sol_address(private_bytes: bytes) -> str:
+    if not _validate_private_key(private_bytes):
+        return "?"
+    try:
+        if len(private_bytes) < 32:
+            private_bytes = private_bytes.rjust(32, b'\x00')
+        sk = SolKeypair.from_bytes(private_bytes[:32])
+        return str(sk.pubkey())
+    except Exception:
+        try:
+            from nacl.bindings import crypto_sign_seed_keypair
+            pk = crypto_sign_seed_keypair(private_bytes[:32])[1]
+            return base58.b58encode(pk).decode()
+        except Exception:
+            return "?"
+
+def derive_all_addresses(key_type: str, key_data):
+    addresses = {}
+    if key_type == "BIP39":
+        try:
+            seed = Bip39SeedGenerator(key_data).Generate()
+            from bip_utils import Bip44Changes
+
+            def derive_eth(seed): return Bip44.FromSeed(seed, Bip44Coins.ETHEREUM).DeriveDefaultPath().PublicKey().ToAddress()
+            def derive_btc_legacy(seed): return Bip44.FromSeed(seed, Bip44Coins.BITCOIN).DeriveDefaultPath().PublicKey().ToAddress()
+            def derive_btc_segwit(seed): return Bip49.FromSeed(seed, Bip49Coins.BITCOIN).DeriveDefaultPath().PublicKey().ToAddress()
+            def derive_btc_native(seed): return Bip84.FromSeed(seed, Bip84Coins.BITCOIN).DeriveDefaultPath().PublicKey().ToAddress()
+
+            try:
+                addresses["ETH"] = derive_eth(seed)
+            except Exception:
+                addresses["ETH"] = "?"
+            try:
+                addresses["BTC-legacy"] = derive_btc_legacy(seed)
+            except Exception:
+                addresses["BTC-legacy"] = "?"
+            try:
+                addresses["BTC-segwit"] = derive_btc_segwit(seed)
+            except Exception:
+                addresses["BTC-segwit"] = "?"
+            try:
+                addresses["BTC-native"] = derive_btc_native(seed)
+            except Exception:
+                addresses["BTC-native"] = "?"
+
+            try:
+                sol_deriver = Bip32Slip10Ed25519.FromSeed(seed)
+                sol_deriver = sol_deriver.DerivePath("44'/501'/0'/0'")
+                sol_priv = sol_deriver.PrivateKey().Raw().ToBytes()
+                addresses["SOL"] = private_key_to_sol_address(sol_priv)
+            except Exception:
                 try:
-                    data = json.loads(cleaned_line)
-                    
-                    # Track crawl heartbeats from your automated crawler logs
-                    if data.get("Type") in ["CRAWL_HEARTBEAT", "COOLDOWN_PULSE"]:
-                        repos += 1
-                        continue
-                    
-                    # FIX: Explicitly evaluate if the line contains core secret match details.
-                    # This safely filters out custom status headers or broken telemetry rows.
-                    if "DetectorName" not in data and "SourceMetadata" not in data:
-                        continue
-
-                    is_verified = data.get("Verified", False) == True or str(data.get("Verified")).lower() == "true"
-                    detector_name = data.get("DetectorName", "Custom Rule Check")
-                    raw_key = data.get('Raw', data.get('Redacted', 'No Raw Decoded Content Blocks Available'))
-                    balance_val = float(data.get("Balance", data.get("ExtraData", {}).get("balance", 0.0)))
-                    
-                    if balance_val > 0.01:
-                        self.all_time_funded += 1
-                        with open(self.balance_file, "a", encoding="utf-8") as bf:
-                            bf.write(f"[FUNDED MATCH] Detector: {detector_name} | Key/Address: {raw_key} | Balance: ${balance_val}\n")
-                    else:
-                        self.all_time_empty += 1
-
-                    if filter_balance and balance_val <= 0.01:
-                        continue
-                    if filter_mode == "Verified Keys Only" and not is_verified:
-                        continue
-                    if filter_mode == "BIP39 Mnemonic Only" and "BIP39" not in detector_name:
-                        continue
-
-                    total_alerts += 1
-                    if is_verified:
-                        verified_count += 1
-
-                    source_metadata = data.get('SourceMetadata', {})
-                    metadata_data = source_metadata.get('Data', {})
-                    git_meta = metadata_data.get('Git', {})
-                    github_meta = metadata_data.get('Github', {})
-                    filesystem_meta = metadata_data.get('Filesystem', {})
-
-                    # Resolve individual metadata items across file and crawler formats
-                    repo_url = git_meta.get('Url') or github_meta.get('repository') or github_meta.get('link') or filesystem_meta.get('file') or target_path or 'Local Target Location'
-                    filename = git_meta.get('File') or github_meta.get('file') or filesystem_meta.get('file') or 'Local Asset Target'
-                    line_num = git_meta.get('Line') or github_meta.get('line') or filesystem_meta.get('line') or '?'
-
-                    print(f"[{data.get('Time', 'Active')}] MATCH: {detector_name} | Key/Address: {raw_key} | Source: {repo_url}", flush=True)
-
-                    alert_entry = f"[{data.get('Time', 'Active')}] 🎯 MATCH: {detector_name} | Verified: {is_verified} | Source Target: {repo_url}\n"
-                    temporary_alert_buffer.append(alert_entry)
-
-                    master_entry = f"=== CONSOLE INTERFACE ALERT LOG ENTRY #{total_alerts} ===\n"
-                    master_entry += f"📄 Path Location: {filename} (Line Reference: {line_num})\n"
-                    master_entry += f"🔑 Raw Decoded Content Extraction: {raw_key}\n"
-                    master_entry += f"⚙️ Complete Meta String Object Structure:\n{json.dumps(data, indent=2)}\n"
-                    master_entry += "-"*100 + "\n"
-                    temporary_master_buffer.append(master_entry)
-
-                    if len(temporary_alert_buffer) >= 500:
-                        alert_chunk = "".join(temporary_alert_buffer)
-                        self.root.after(0, self.flush_alert_chunk, alert_chunk)
-                        temporary_alert_buffer = []
-
+                    sol_deriver = Bip32Slip10Ed25519.FromSeed(seed)
+                    sol_deriver = sol_deriver.DerivePath("44'/501'/0'")
+                    sol_priv = sol_deriver.PrivateKey().Raw().ToBytes()
+                    addresses["SOL"] = private_key_to_sol_address(sol_priv)
                 except Exception:
-                    pass
+                    sol_bytes = hashlib.sha256(seed).digest()[:32]
+                    addresses["SOL"] = private_key_to_sol_address(sol_bytes)
+        except Exception:
+            pass
 
-        if temporary_alert_buffer:
-            alert_chunk = "".join(temporary_alert_buffer)
-            self.root.after(0, self.flush_alert_chunk, alert_chunk)
+    elif key_type in ("PEM-EC", "PEM-RSA", "WIF", "RAW-HEX",
+                      "WIF-Compressed", "SOLANA-JSON", "SOLANA-B58",
+                      "BASE64-PK", "BASE64-KEY", "NAMED-HEX"):
+        priv_bytes = key_data if isinstance(key_data, bytes) else (
+            base64.b64decode(key_data) if key_type in ("BASE64-PK", "BASE64-KEY", "NAMED-B64")
+            else bytes.fromhex(key_data.replace("0x", ""))
+        )
+        if len(priv_bytes) > 32:
+            try:
+                from eth_keys import keys
+                pk = keys.PrivateKey(priv_bytes[:32])
+                addresses["ETH"] = pk.public_key.to_checksum_address()
+            except ImportError:
+                addresses["ETH"] = private_key_to_eth_address(priv_bytes[:32])
+        else:
+            addresses["ETH"] = private_key_to_eth_address(priv_bytes)
 
-        temporary_master_buffer.reverse()
-        final_payload_block_string = "".join(temporary_master_buffer)
-        
-        self.root.after(0, self.set_master_pane_text, final_payload_block_string)
-        self.root.after(0, self.update_counters, repos, verified_count, total_alerts)
-        self.root.after(0, self.save_persistent_stats)
+        try:
+            btc_addrs = private_key_to_btc_addresses(priv_bytes)
+            addresses["BTC-legacy"] = btc_addrs.get("legacy", "?")
+            addresses["BTC-segwit"] = btc_addrs.get("segwit", "?")
+            addresses["BTC-native"] = btc_addrs.get("native_segwit", "?")
+        except ImportError:
+            addresses["BTC-legacy"] = addresses["BTC-segwit"] = addresses["BTC-native"] = "?"
 
-    def flush_alert_chunk(self, text_chunk):
-        self.txt_alerts.insert("1.0", text_chunk)
+        addresses["SOL"] = private_key_to_sol_address(priv_bytes)
 
-    def set_master_pane_text(self, text):
-        self.txt_master.delete("1.0", tk.END)
-        self.txt_master.insert(tk.END, text)
+    elif key_type == "ETH-KEYSTORE":
+        try:
+            ks = key_data
+            ciphertext = bytes.fromhex(ks["crypto"]["ciphertext"])
+            mac = bytes.fromhex(ks["crypto"]["mac"])
+            kdf = ks["crypto"].get("kdf", "scrypt")
 
-    def update_counters(self, repos, verified, alerts):
-        self.lbl_stats.config(text=f"🔢 Scans Checked: {repos}   |   🟢 Verified Secret Leaks: {verified}   |   🚨 Total Dashboard Alerts: {alerts}")
+            if kdf == "pbkdf2":
+                salt = bytes.fromhex(ks["crypto"]["kdfparams"]["salt"])
+                dklen = ks["crypto"]["kdfparams"]["dklen"]
+                c = ks["crypto"]["kdfparams"]["c"]
+                derived = hashlib.pbkdf2_hmac("sha256", b"", salt, c, dklen)
+            else:
+                salt = bytes.fromhex(ks["crypto"]["kdfparams"]["salt"])
+                n = ks["crypto"]["kdfparams"]["n"]
+                r_val = ks["crypto"]["kdfparams"]["r"]
+                p = ks["crypto"]["kdfparams"]["p"]
+                dklen = ks["crypto"]["kdfparams"]["dklen"]
+                try:
+                    import hashlib
+                    derived = hashlib.scrypt(b"", salt=salt, n=n, r=r_val, p=p, maxmem=256*1024*1024, dklen=dklen)
+                except Exception:
+                    derived = b""
+
+            if derived:
+                aes_key = derived[:16]
+                if hmac.new(aes_key, ciphertext, hashlib.sha256).hexdigest() == mac.hex():
+                    iv = bytes.fromhex(ks["crypto"].get("cipherparams", {}).get("iv", ""))
+                    cipher = Cipher(algorithms.AES(aes_key), modes.CTR(iv), backend=default_backend())
+                    decryptor = cipher.decryptor()
+                    pk_bytes = decryptor.update(ciphertext) + decryptor.finalize()
+                    addresses["ETH"] = private_key_to_eth_address(pk_bytes)
+                    addresses["BTC-legacy"] = addresses["BTC-segwit"] = addresses["BTC-native"] = "?"
+                    addresses["SOL"] = private_key_to_sol_address(pk_bytes)
+        except Exception:
+            pass
+
+    return addresses
+
+# ═══════════════════════════════════════════════════════════════
+# BALANCE CHECKERS
+# ═══════════════════════════════════════════════════════════════
+
+def check_evm_balance(rpc_url: str, address: str, chain: str):
+    if not address or address == "?" or not address.startswith("0x"):
+        return 0.0
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": [address, "latest"],
+        "id": 1
+    }
+    try:
+        resp = requests.post(rpc_url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "result" in data and data["result"]:
+                return int(data["result"], 16) / 1e18
+    except Exception:
+        pass
+    return 0.0
+
+def check_btc_balance(address: str):
+    if not address or address == "?":
+        return 0.0
+    try:
+        resp = requests.get(f"{BTC_API}{address}", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if address in data:
+                return data[address].get("final_balance", 0) / 1e8
+    except Exception:
+        pass
+    return 0.0
+
+def check_sol_balance(address: str):
+    if not address or address == "?":
+        return 0.0
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "getBalance",
+        "params": [address],
+        "id": 1
+    }
+    try:
+        resp = requests.post(SOLANA_RPC, json=payload, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "result" in data and "value" in data["result"]:
+                return data["result"]["value"] / 1e9
+    except Exception:
+        pass
+    return 0.0
+
+COINGECKO_IDS = {
+    "Ethereum": "ethereum",
+    "BSC": "binancecoin",
+    "Polygon": "matic-network",
+    "Arbitrum": "arbitrum",
+    "Optimism": "optimism",
+    "Base": "base",
+    "Avalanche": "avalanche-2",
+    "zkSync": "zksync",
+    "Solana": "solana",
+}
+
+_usd_prices = {}
+_usd_lock = threading.Lock()
+_last_price_fetch = 0
+
+def fetch_usd_prices():
+    global _last_price_fetch
+    now = time.time()
+    if now - _last_price_fetch < 120:
+        return
+    ids = ",".join(COINGECKO_IDS.values())
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            with _usd_lock:
+                for chain, cg_id in COINGECKO_IDS.items():
+                    if cg_id in data and "usd" in data[cg_id]:
+                        _usd_prices[chain] = data[cg_id]["usd"]
+                _last_price_fetch = now
+    except Exception:
+        pass
+
+def get_usd_price(chain: str) -> float:
+    with _usd_lock:
+        return _usd_prices.get(chain, 0.0)
+
+# ═══════════════════════════════════════════════════════════════
+# SCANNER ENGINE
+# ═══════════════════════════════════════════════════════════════
+
+class ScannerEngine:
+    def __init__(self, status_callback=None, key_callback=None, progress_callback=None):
+        self.running = False
+        self.status_cb = status_callback
+        self.key_cb = key_callback
+        self.progress_cb = progress_callback
+        self.scanned_count = 0
+        self.found_keys = 0
+        self.throttle_ms = 0
+        self._rpc_sem = threading.Semaphore(4)
+        self._file_sem = threading.Semaphore(2)
+
+    def scan_folder(self, folder_path: str):
+        self.running = True
+        self.scanned_count = 0
+        self.found_keys = 0
+        all_files = []
+        for root, dirs, files in os.walk(folder_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and not d.startswith("_")]
+            for f in files:
+                all_files.append(os.path.join(root, f))
+
+        total = len(all_files)
+        for idx, filepath in enumerate(all_files):
+            if not self.running:
+                break
+            self.scanned_count += 1
+
+            throttle = self.throttle_ms / 1000.0
+            if throttle > 0:
+                time.sleep(throttle)
+
+            if self.progress_cb:
+                self.progress_cb(self.scanned_count, total)
+            if self.status_cb:
+                self.status_cb(f"Scanning ({self.scanned_count}/{total}): {os.path.basename(filepath)}")
+
+            if total > 100 and self.scanned_count % 50 == 0:
+                time.sleep(0.01)
+
+            keys = scan_file_for_keys(filepath)
+            if keys:
+                self.found_keys += len(keys)
+                for key_type, key_data in keys:
+                    rel_path = os.path.relpath(filepath, folder_path)
+                    record = {
+                        "type": "KEY_FOUND",
+                        "file": rel_path,
+                        "file_abs": filepath,
+                        "key_type": key_type,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                    if key_type == "BIP39":
+                        record["bip39_phrase"] = key_data
+                    elif isinstance(key_data, bytes):
+                        record["private_key_hex"] = key_data.hex()
+                    else:
+                        record["private_key_raw"] = str(key_data)
+
+                    jsonl_append(SCANNED_JSONL, record)
+
+                    addresses = derive_all_addresses(key_type, key_data)
+
+                    if self.key_cb:
+                        self.key_cb(rel_path, key_type, key_data, addresses)
+
+                    fetch_usd_prices()
+
+                    def check_and_record(chain, addr, checker_fn):
+                        with self._rpc_sem:
+                            bal = checker_fn(addr)
+                        bal_record = {
+                            "type": "BALANCE",
+                            "file": rel_path,
+                            "key_type": key_type,
+                            "chain": chain,
+                            "address": addr,
+                            "balance": bal,
+                            "usd": bal * get_usd_price(chain),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                        jsonl_append(BALANCE_JSONL, bal_record)
+                        return bal
+
+                    for addr_name, addr in addresses.items():
+                        if addr == "?" or not addr:
+                            continue
+                        if addr_name == "ETH":
+                            for chain, rpc in RPC_ENDPOINTS.items():
+                                bal = check_and_record(chain, addr, lambda a, c=chain, r=rpc: check_evm_balance(r, a, c))
+                                if self.key_cb:
+                                    self.key_cb(rel_path, key_type, None, chain, bal, addr)
+                                time.sleep(0.2 + throttle)
+                        elif addr_name.startswith("BTC"):
+                            bal = check_and_record("Bitcoin", addr, lambda a: check_btc_balance(a))
+                            if self.key_cb:
+                                self.key_cb(rel_path, key_type, None, "Bitcoin", bal, addr)
+                            time.sleep(0.2 + throttle)
+                        elif addr_name == "SOL":
+                            bal = check_and_record("Solana", addr, lambda a: check_sol_balance(a))
+                            if self.key_cb:
+                                self.key_cb(rel_path, key_type, None, "Solana", bal, addr)
+                            time.sleep(0.2 + throttle)
+
+        if self.status_cb:
+            self.status_cb(f"Scan complete. Files: {self.scanned_count}, Keys: {self.found_keys}")
+        self.running = False
+
+    def stop(self):
+        self.running = False
+
+_CHAIN_COLORS = {
+    "Ethereum": "#627eea", "BSC": "#f0b90b", "Polygon": "#8247e5",
+    "Arbitrum": "#2d374b", "Optimism": "#ff0420", "Base": "#0052ff",
+    "Avalanche": "#e84142", "zkSync": "#8c8dfc", "Solana": "#9945ff",
+    "Bitcoin": "#f7931a",
+}
+
+# ═══════════════════════════════════════════════════════════════
+# MODERN GUI
+# ═══════════════════════════════════════════════════════════════
+
+class App(ttk.Frame):
+    def __init__(self, root):
+        super().__init__(root)
+        self.root = root
+        self.engine = ScannerEngine(
+            status_callback=self.on_status,
+            key_callback=self.on_key_found,
+            progress_callback=self.on_progress,
+        )
+        self.scan_thread = None
+        self.active_folder = None
+        self._last_balance_meta = ("?", "?")
+        self.initialized = False
+
+        self._build_ui()
+        self._apply_styles()
+        self.initialized = True
+
+    def _apply_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+
+        bg = "#f5faf5"
+        fg = "#1b5e20"
+        sel = "#81c784"
+        secondary = "#e8f5e9"
+        border = "#a5d6a7"
+
+        style.configure(".", background=bg, foreground=fg, fieldbackground=bg,
+                         font=("Segoe UI", 10))
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.map("TLabel", background=[("active", bg)])
+        style.configure("TFrame", background=bg)
+        style.configure("TLabelframe", background=secondary, foreground="#2e7d32",
+                         bordercolor=border, lightcolor=border, darkcolor=border,
+                         relief=tk.GROOVE)
+        style.configure("TLabelframe.Label", background=secondary, foreground="#2e7d32",
+                         font=("Segoe UI", 10, "bold"))
+        style.configure("TButton", background="#66bb6a", foreground="#ffffff",
+                         bordercolor=border, lightcolor=border, darkcolor=border,
+                         focuscolor="none", font=("Segoe UI", 9, "bold"))
+        style.map("TButton", background=[("active", "#81c784"), ("pressed", "#388e3c")])
+        style.configure("Accent.TButton", background="#388e3c", foreground="#ffffff")
+        style.map("Accent.TButton", background=[("active", "#4caf50"), ("pressed", "#2e7d32")])
+        style.configure("TEntry", fieldbackground="#ffffff", foreground=fg,
+                         bordercolor=border, lightcolor=border, darkcolor=border)
+        style.configure("TCombobox", fieldbackground="#ffffff", foreground=fg,
+                         arrowcolor=fg, bordercolor=border)
+        style.configure("TNotebook", background=bg, bordercolor=border, tabmargins=(0,0,0,0))
+        style.configure("TNotebook.Tab", background=secondary, foreground=fg,
+                         padding=[12, 4], font=("Segoe UI", 9, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", sel), ("active", border)],
+                   foreground=[("selected", "#ffffff"), ("active", "#1b5e20")])
+        style.configure("Horizontal.TProgressbar", background="#4caf50",
+                         troughcolor=secondary, bordercolor=border,
+                         lightcolor="#4caf50", darkcolor="#2e7d32")
+        style.configure("Treeview", background="#ffffff", foreground=fg,
+                         fieldbackground="#ffffff", bordercolor=border)
+        style.map("Treeview", background=[("selected", "#c8e6c9")],
+                   foreground=[("selected", "#1b5e20")])
+        style.configure("Treeview.Heading", background="#4caf50", foreground="#ffffff",
+                         bordercolor=border, font=("Segoe UI", 9, "bold"))
+        style.layout("Treeview.Item", [("Treeitem.padding", {"sticky": "nswe"})])
+
+    def _build_ui(self):
+        self.root.title("Recovery Works \u2022 Private Key Scanner & Balance Checker")
+        self.root.geometry("1400x900")
+        self.root.minsize(1100, 700)
+        self.root.configure(background="#f5faf5")
+
+        container = tk.Frame(self.root, bg="#f5faf5")
+        container.pack(fill=tk.BOTH, expand=True)
+
+        # ── Header ──
+        header = tk.Frame(container, bg="#e8f5e9", height=60, bd=0,
+                          highlightthickness=2, highlightbackground="#81c784")
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+
+        inner_h = tk.Frame(header, bg="#e8f5e9")
+        inner_h.pack(fill=tk.X, padx=20, pady=8)
+
+        tk.Label(inner_h, text="\U0001f510  Recovery Works",
+                 font=("Segoe UI", 18, "bold"), fg="#2e7d32", bg="#e8f5e9").pack(side=tk.LEFT)
+        tk.Label(inner_h, text="Key Scanner  \u00b7  Multi-Chain Balances  \u00b7  Full Secret Disclosure",
+                 font=("Segoe UI", 9), fg="#558b2f", bg="#e8f5e9").pack(side=tk.LEFT, padx=(15, 0))
+
+        self.lbl_status_top = tk.Label(inner_h, text="\u25cf  Ready",
+                 font=("Segoe UI", 10, "bold"), fg="#2e7d32", bg="#e8f5e9")
+        self.lbl_status_top.pack(side=tk.RIGHT)
+
+        # ── Control Bar ──
+        ctrl_frame = tk.Frame(container, bg="#e8f5e9", height=48,
+                              highlightthickness=2, highlightbackground="#81c784")
+        ctrl_frame.pack(fill=tk.X, pady=(0,0))
+        ctrl_frame.pack_propagate(False)
+
+        inner_c = tk.Frame(ctrl_frame, bg="#e8f5e9")
+        inner_c.pack(fill=tk.X, padx=20, pady=6)
+
+        self.btn_open = tk.Button(inner_c, text="\U0001f4c2  Open Folder",
+                 font=("Segoe UI", 9, "bold"), bg="#66bb6a", fg="#ffffff",
+                 activebackground="#81c784", activeforeground="#ffffff",
+                 relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+                 command=self.on_open_folder)
+        self.btn_open.pack(side=tk.LEFT)
+
+        self.btn_scan = tk.Button(inner_c, text="\u25b6  Scan",
+                 font=("Segoe UI", 9, "bold"), bg="#388e3c", fg="#ffffff",
+                 activebackground="#4caf50", activeforeground="#ffffff",
+                 relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+                 state=tk.DISABLED, command=self.on_start_scan)
+        self.btn_scan.pack(side=tk.LEFT, padx=(8,0))
+
+        self.btn_stop = tk.Button(inner_c, text="\u25a0  Stop",
+                 font=("Segoe UI", 9, "bold"), bg="#c62828", fg="#ffffff",
+                 activebackground="#ef5350", activeforeground="#ffffff",
+                 relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+                 state=tk.DISABLED, command=self.on_stop_scan)
+        self.btn_stop.pack(side=tk.LEFT, padx=(8,0))
+
+        sep = tk.Frame(inner_c, width=1, bg="#a5d6a7", height=24)
+        sep.pack(side=tk.LEFT, padx=(12, 8))
+
+        tk.Label(inner_c, text="Speed:", font=("Segoe UI", 8),
+                 fg="#558b2f", bg="#e8f5e9").pack(side=tk.LEFT)
+
+        self.speed_var = tk.IntVar(value=3)
+        self.speed_slider = tk.Scale(inner_c, from_=1, to=5, orient=tk.HORIZONTAL,
+                 variable=self.speed_var, showvalue=False, length=80,
+                 bg="#e8f5e9", fg="#1b5e20", troughcolor="#c8e6c9",
+                 activebackground="#4caf50", highlightthickness=0,
+                 bd=0, sliderrelief=tk.FLAT, command=self._on_speed_change)
+        self.speed_slider.pack(side=tk.LEFT, padx=(2, 2))
+
+        speed_labels = tk.Frame(inner_c, bg="#e8f5e9")
+        speed_labels.pack(side=tk.LEFT)
+        tk.Label(speed_labels, text="Fast", font=("Segoe UI", 7),
+                 fg="#689f63", bg="#e8f5e9").pack(side=tk.LEFT)
+        tk.Label(speed_labels, text=" \u00b7 ", font=("Segoe UI", 7),
+                 fg="#a5d6a7", bg="#e8f5e9").pack(side=tk.LEFT)
+        tk.Label(speed_labels, text="Gentle", font=("Segoe UI", 7),
+                 fg="#689f63", bg="#e8f5e9").pack(side=tk.LEFT)
+
+        self.lbl_folder = tk.Label(inner_c, text="No folder selected",
+                 font=("Segoe UI", 9), fg="#558b2f", bg="#e8f5e9")
+        self.lbl_folder.pack(side=tk.LEFT, padx=(15,0))
+
+        self.lbl_progress = tk.Label(inner_c, text="",
+                 font=("Segoe UI", 9), fg="#558b2f", bg="#e8f5e9")
+        self.lbl_progress.pack(side=tk.RIGHT, padx=(0,10))
+
+        self.progress = ttk.Progressbar(inner_c, mode="determinate",
+                 style="Horizontal.TProgressbar", length=200)
+        self.progress.pack(side=tk.RIGHT, padx=(0,10))
+
+        # ── Stats Bar ──
+        stats_frame = tk.Frame(container, bg="#f5faf5")
+        stats_frame.pack(fill=tk.X, padx=20, pady=(6,0))
+
+        self.stats_widgets = {}
+        stats_items = [
+            ("files", "Files Scanned", "0"),
+            ("keys", "Keys Found", "0"),
+            ("funded", "Funded Wallets", "0"),
+        ]
+        for i, (key, label, default) in enumerate(stats_items):
+            f = tk.Frame(stats_frame, bg="#e8f5e9", bd=0, highlightthickness=2,
+                         highlightbackground="#81c784", padx=16, pady=8)
+            f.pack(side=tk.LEFT, padx=(0,10))
+            tk.Label(f, text=label, font=("Segoe UI", 8), fg="#558b2f",
+                     bg="#e8f5e9").pack()
+            w = tk.Label(f, text=default, font=("Segoe UI", 16, "bold"),
+                         fg="#1b5e20", bg="#e8f5e9")
+            w.pack()
+            self.stats_widgets[key] = w
+
+        # ── Notebook ──
+        self.notebook = ttk.Notebook(container)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Tab 1: Scanner Log
+        self.tab_log = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_log, text="  Scanner  ")
+
+        log_frame = tk.Frame(self.tab_log, bg="#f5faf5")
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        self.txt_log = tk.Text(log_frame, font=("Consolas", 10),
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
+                 relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.WORD,
+                 state=tk.DISABLED)
+        self.txt_log.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        scroll_log = tk.Scrollbar(log_frame, command=self.txt_log.yview,
+                 bg="#c8e6c9", troughcolor="#e8f5e9", bd=0)
+        scroll_log.pack(fill=tk.Y, side=tk.RIGHT)
+        self.txt_log.config(yscrollcommand=scroll_log.set)
+
+        self.txt_log.tag_config("info", foreground="#558b2f")
+        self.txt_log.tag_config("success", foreground="#2e7d32")
+        self.txt_log.tag_config("warning", foreground="#e65100")
+        self.txt_log.tag_config("error", foreground="#c62828")
+        self.txt_log.tag_config("highlight", foreground="#2e7d32", font=("Consolas", 10, "bold"))
+        self.txt_log.tag_config("balance_pos", foreground="#1b5e20", font=("Consolas", 11, "bold"))
+        self.txt_log.tag_config("balance_zero", foreground="#8d6e63")
+        self.txt_log.tag_config("bip39", foreground="#6a1b9a")
+        self.txt_log.tag_config("pem", foreground="#1565c0")
+        self.txt_log.tag_config("wif", foreground="#e65100")
+        self.txt_log.tag_config("hex", foreground="#2e7d32")
+        self.txt_log.tag_config("key_value", foreground="#1b5e20", font=("Consolas", 10, "bold"))
+
+        # Tab 2: Results Table
+        self.tab_results = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_results, text="  Results  ")
+
+        res_frame = tk.Frame(self.tab_results, bg="#f5faf5")
+        res_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        columns = ("file", "key_type", "chain", "address", "balance", "usd")
+        self.tree = ttk.Treeview(res_frame, columns=columns, show="headings",
+                  height=16, selectmode="extended")
+        self.tree.heading("file", text="Source File")
+        self.tree.heading("key_type", text="Key Type")
+        self.tree.heading("chain", text="Chain")
+        self.tree.heading("address", text="Address")
+        self.tree.heading("balance", text="Balance")
+        self.tree.heading("usd", text="USD Value")
+
+        self.tree.column("file", width=200, minwidth=120)
+        self.tree.column("key_type", width=100, minwidth=80, anchor=tk.CENTER)
+        self.tree.column("chain", width=100, minwidth=80, anchor=tk.CENTER)
+        self.tree.column("address", width=280, minwidth=180)
+        self.tree.column("balance", width=120, minwidth=90, anchor=tk.E)
+        self.tree.column("usd", width=100, minwidth=80, anchor=tk.E)
+
+        self.tree.tag_configure("funded", foreground="#1b5e20", font=("Segoe UI", 10, "bold"))
+        self.tree.tag_configure("empty", foreground="#8d6e63")
+        self.tree.tag_configure("error", foreground="#c62828")
+
+        scroll_tree_y = tk.Scrollbar(res_frame, command=self.tree.yview,
+                 bg="#c8e6c9", troughcolor="#e8f5e9", bd=0)
+        scroll_tree_x = tk.Scrollbar(res_frame, orient=tk.HORIZONTAL,
+                 command=self.tree.xview, bg="#c8e6c9", troughcolor="#e8f5e9", bd=0)
+        self.tree.configure(yscrollcommand=scroll_tree_y.set,
+                            xscrollcommand=scroll_tree_x.set)
+
+        self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        scroll_tree_y.pack(fill=tk.Y, side=tk.RIGHT)
+        scroll_tree_x.pack(fill=tk.X, side=tk.BOTTOM)
+
+        # Tab 3: History (JSONL Viewer)
+        self.tab_history = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_history, text="  History  ")
+
+        hist_frame = tk.Frame(self.tab_history, bg="#f5faf5")
+        hist_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        btn_hist_row = tk.Frame(hist_frame, bg="#f5faf5")
+        btn_hist_row.pack(fill=tk.X, pady=(0,6))
+
+        tk.Button(btn_hist_row, text="\U0001f504  Refresh History",
+                 font=("Segoe UI", 9, "bold"), bg="#66bb6a", fg="#ffffff",
+                 activebackground="#81c784", relief=tk.FLAT, padx=12, pady=2,
+                 cursor="hand2", command=self.refresh_history).pack(side=tk.LEFT)
+        tk.Button(btn_hist_row, text="\U0001f5d1  Clear All Records",
+                 font=("Segoe UI", 9, "bold"), bg="#c62828", fg="#ffffff",
+                 activebackground="#ef5350", relief=tk.FLAT, padx=12, pady=2,
+                 cursor="hand2", command=self.clear_records).pack(side=tk.LEFT, padx=(8,0))
+
+        self.txt_history = tk.Text(hist_frame, font=("Consolas", 9),
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
+                 relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.NONE,
+                 state=tk.DISABLED)
+        self.txt_history.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        scroll_hist = tk.Scrollbar(hist_frame, command=self.txt_history.yview,
+                 bg="#c8e6c9", troughcolor="#e8f5e9", bd=0)
+        scroll_hist.pack(fill=tk.Y, side=tk.RIGHT)
+        self.txt_history.config(yscrollcommand=scroll_hist.set)
+
+        # ── Footer with resize grip ──
+        footer = tk.Frame(container, bg="#e8f5e9", height=32,
+                          highlightthickness=2, highlightbackground="#81c784")
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        footer.pack_propagate(False)
+
+        self.lbl_footer = tk.Label(footer,
+                 text="\u2699  Ready to scan  |  0 keys found  |  0 funded",
+                 font=("Segoe UI", 9), fg="#558b2f", bg="#e8f5e9")
+        self.lbl_footer.pack(side=tk.LEFT, padx=15)
+
+        self.lbl_jsonl = tk.Label(footer,
+                 text=f"\U0001f4be  {SCANNED_JSONL} / {BALANCE_JSONL}",
+                 font=("Segoe UI", 8), fg="#689f63", bg="#e8f5e9")
+        self.lbl_jsonl.pack(side=tk.RIGHT, padx=15)
+
+        resize_grip = tk.Frame(footer, bg="#81c784", width=20, height=20,
+                                highlightthickness=0, cursor="bottom_right_corner")
+        resize_grip.pack(side=tk.RIGHT, padx=(0, 0), pady=0)
+        tk.Label(resize_grip, text="\u2b0a", font=("Segoe UI", 10),
+                 fg="#ffffff", bg="#81c784").pack()
+
+    # ── GUI Actions ──
+
+    def on_open_folder(self):
+        folder = filedialog.askdirectory(title="Select folder to scan for private keys")
+        if folder:
+            self.active_folder = folder
+            self.lbl_folder.config(text=f"\U0001f4c2  {folder}")
+            self.btn_scan.config(state=tk.NORMAL)
+            self.log("info", f"Selected folder: {folder}")
+            self.log("info", "Click \u25b6 Scan to begin key extraction and balance checking")
+
+    def _on_speed_change(self, val):
+        speed_map = {1: 0.5, 2: 0.2, 3: 0.05, 4: 0.01, 5: 0.0}
+        delay = speed_map.get(int(float(val)), 0.05)
+        self.engine.throttle_ms = delay
+        self.lbl_status_top.config(text=f"\u25cf  {'Gentle' if delay >= 0.2 else 'Balanced' if delay >= 0.05 else 'Fast' if delay > 0 else 'Turbo'}")
+
+    def on_start_scan(self):
+        if not self.active_folder:
+            return
+        self.btn_scan.config(state=tk.DISABLED)
+        self.btn_stop.config(state=tk.NORMAL)
+        self.btn_open.config(state=tk.DISABLED)
+        self.progress["value"] = 0
+        self.lbl_status_top.config(text="\u25cf  Scanning...", fg="#e65100", bg="#e8f5e9")
+        self.txt_log.config(state=tk.NORMAL)
+        self.txt_log.delete("1.0", tk.END)
+        self.txt_log.config(state=tk.DISABLED)
+        for w in self.stats_widgets.values():
+            w.config(text="0")
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        self._on_speed_change(self.speed_var.get())
+
+        self.scan_thread = threading.Thread(
+            target=self.engine.scan_folder,
+            args=(self.active_folder,),
+            daemon=True
+        )
+        self.scan_thread.start()
+
+    def on_stop_scan(self):
+        self.engine.stop()
+        self.btn_stop.config(state=tk.DISABLED)
+        self.log("warning", "Scan stopped by user")
+
+    def on_status(self, message: str):
+        self.root.after(0, self._update_status, message)
+
+    def _update_status(self, message: str):
+        self.lbl_footer.config(text=f"\u2699  {message}")
+        if "complete" in message.lower():
+            self.lbl_status_top.config(text="\u25cf  Ready", fg="#2e7d32")
+            self.btn_scan.config(state=tk.NORMAL)
+            self.btn_stop.config(state=tk.DISABLED)
+            self.btn_open.config(state=tk.NORMAL)
+
+    def on_progress(self, current: int, total: int):
+        pct = int((current / max(total, 1)) * 100)
+        self.root.after(0, self._update_progress, current, total, pct)
+
+    def _update_progress(self, current: int, total: int, pct: int):
+        self.progress["value"] = pct
+        self.lbl_progress.config(text=f"{current}/{total} files ({pct}%)")
+        self.stats_widgets["files"].config(text=str(current))
+
+    def on_key_found(self, file_rel, key_type, key_data, addresses,
+                     chain=None, balance=None, address=None):
+        self.root.after(0, self._handle_key_found, file_rel, key_type, key_data, addresses, chain, balance, address)
+
+    def _handle_key_found(self, file_rel, key_type, key_data, addresses, chain, balance, address):
+        if key_data is not None:
+            self.stats_widgets["keys"].config(text=str(int(self.stats_widgets["keys"]["text"]) + 1))
+
+            lbl = {
+                "BIP39": "BIP39 Mnemonic", "PEM-EC": "PEM EC Key", "PEM-RSA": "PEM RSA Key",
+                "WIF": "WIF Key", "WIF-Compressed": "WIF (Compressed)",
+                "RAW-HEX": "Raw Hex Private Key", "SOLANA-JSON": "Solana Keypair",
+                "SOLANA-B58": "Solana Base58", "ETH-KEYSTORE": "ETH Keystore",
+                "SSH": "SSH Private Key", "PGP": "PGP Private Key",
+                "BIP38-Encrypted": "BIP38 Encrypted Key",
+                "BASE64-PK": "Base64 Private Key", "BASE64-KEY": "Base64 Key",
+                "NAMED-B64": "Named Base64 Key", "NAMED-HEX": "Named Hex Key",
+                "NAMED-PHRASE": "Named Phrase", "NAMED-WIF": "Named WIF",
+            }.get(key_type, key_type)
+
+            tag_map = {"BIP39": "bip39", "PEM-EC": "pem", "PEM-RSA": "pem",
+                       "WIF": "wif", "WIF-Compressed": "wif",
+                       "RAW-HEX": "hex", "SOLANA-JSON": "hex", "SOLANA-B58": "hex",
+                       "BASE64-PK": "hex", "BASE64-KEY": "hex",
+                       "NAMED-B64": "hex", "NAMED-HEX": "hex",
+                       "NAMED-WIF": "wif"}
+
+            self.log(tag_map.get(key_type, "highlight"), f"[{lbl}] in {file_rel}")
+
+            key_display = (
+                key_data if isinstance(key_data, str) and key_type == "BIP39"
+                else key_data.hex() if isinstance(key_data, bytes)
+                else str(key_data)
+            )
+            self.log("key_value", f"   Full Secret: {key_display}")
+
+            if addresses:
+                for addr_name, addr in addresses.items():
+                    if addr and addr != "?":
+                        self.log("info", f"   {addr_name}: {addr}")
+            self._last_balance_meta = (file_rel, lbl)
+
+        if chain is not None and balance is not None:
+            meta = getattr(self, "_last_balance_meta", (file_rel or "?", key_type or "?"))
+            self._record_balance(meta[0], meta[1], chain, balance, address)
+
+    def _record_balance(self, file_rel, key_type, chain, balance, address):
+        funded = balance > 0.001
+        bal_label = f"{balance:.8f}" if balance > 0 else "0.0"
+        usd_val = balance * get_usd_price(chain) if funded else 0.0
+
+        log_line = f"   \u2192 {chain} ({address}): {bal_label}"
+        if funded:
+            log_line += f"  \u2192 ${usd_val:.2f}"
+            try:
+                curr = int(self.stats_widgets["funded"]["text"])
+            except Exception:
+                curr = 0
+            self.stats_widgets["funded"].config(text=str(curr + 1))
+            self.log("balance_pos", log_line)
+        else:
+            self.log("balance_zero", log_line)
+
+        src_file = file_rel if file_rel else (getattr(self, "_last_balance_meta", ("?", "?"))[0])
+        ktype = key_type if key_type else (getattr(self, "_last_balance_meta", ("?", "?"))[1])
+
+        funded_tag = "funded" if funded else "empty"
+        self.tree.insert("", tk.END,
+            values=(src_file, ktype, chain, address or "?", f"{balance:.8f}", f"${usd_val:.2f}"),
+            tags=(funded_tag,))
+
+        try:
+            kc = int(self.stats_widgets["keys"]["text"])
+        except Exception:
+            kc = 0
+        try:
+            fc = int(self.stats_widgets["funded"]["text"])
+        except Exception:
+            fc = 0
+        self.lbl_footer.config(
+            text=f"\u2699  {kc} keys  |  {fc} funded  |  checking {chain}...")
+
+    def log(self, tag: str, message: str, extra: str = ""):
+        self.txt_log.config(state=tk.NORMAL)
+        self.txt_log.insert(tk.END, message + "\n", tag)
+        self.txt_log.see(tk.END)
+        self.txt_log.config(state=tk.DISABLED)
+
+    def refresh_history(self):
+        self.txt_history.config(state=tk.NORMAL)
+        self.txt_history.delete("1.0", tk.END)
+        records = []
+        records.extend(jsonl_read_all(SCANNED_JSONL))
+        records.extend(jsonl_read_all(BALANCE_JSONL))
+        records.sort(key=lambda r: r.get("_ts", ""), reverse=True)
+
+        if not records:
+            self.txt_history.insert(tk.END, "No records found.\n", "info")
+        else:
+            for r in records[:2000]:
+                self.txt_history.insert(tk.END, json.dumps(r, indent=1) + "\n\n")
+        self.txt_history.config(state=tk.DISABLED)
+        self.log("info", f"Loaded {len(records)} historical records")
+
+    def clear_records(self):
+        if messagebox.askyesno("Clear Records",
+                "Delete all scanned and balance records?\nThis cannot be undone."):
+            for fp in (SCANNED_JSONL, BALANCE_JSONL):
+                if os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+            self.refresh_history()
+            self.log("warning", "All records cleared")
+
+    def on_closing(self):
+        self.engine.stop()
+        self.root.destroy()
+
+# ═══════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     root = tk.Tk()
-    style = ttk.Style()
-    style.theme_use("winnative")
-    app = RecoveryWorksGUI(root)
+    app = App(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
     root.mainloop()

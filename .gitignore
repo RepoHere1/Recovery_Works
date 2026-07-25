@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv_recovery_works/
+*.jsonl
+recovered_portfolio.csv
+Scripts/check_imports.py
