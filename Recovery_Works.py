@@ -1298,28 +1298,28 @@ class App(ttk.Frame):
         style = ttk.Style()
         style.theme_use("clam")
 
-        bg = "#fff8f0"
-        fg = "#e65100"
-        sel = "#ffb74d"
-        secondary = "#fff0e0"
-        border = "#ffcc80"
+        bg = "#f5faf7"
+        fg = "#1b5e20"
+        sel = "#81c784"
+        secondary = "#eaf5ed"
+        border = "#a5d6a7"
 
         style.configure(".", background=bg, foreground=fg, fieldbackground=bg,
                          font=("Segoe UI", 10))
         style.configure("TLabel", background=bg, foreground=fg)
         style.map("TLabel", background=[("active", bg)])
         style.configure("TFrame", background=bg)
-        style.configure("TLabelframe", background=secondary, foreground="#f57c00",
+        style.configure("TLabelframe", background=secondary, foreground="#2e7d32",
                          bordercolor=border, lightcolor=border, darkcolor=border,
                          relief=tk.GROOVE)
-        style.configure("TLabelframe.Label", background=secondary, foreground="#f57c00",
+        style.configure("TLabelframe.Label", background=secondary, foreground="#2e7d32",
                          font=("Segoe UI", 10, "bold"))
-        style.configure("TButton", background="#ff9800", foreground="#ffffff",
+        style.configure("TButton", background="#388e3c", foreground="#ffffff",
                          bordercolor=border, lightcolor=border, darkcolor=border,
                          focuscolor="none", font=("Segoe UI", 9, "bold"))
-        style.map("TButton", background=[("active", "#ffb74d"), ("pressed", "#388e3c")])
+        style.map("TButton", background=[("active", "#81c784"), ("pressed", "#388e3c")])
         style.configure("Accent.TButton", background="#388e3c", foreground="#ffffff")
-        style.map("Accent.TButton", background=[("active", "#4caf50"), ("pressed", "#f57c00")])
+        style.map("Accent.TButton", background=[("active", "#4caf50"), ("pressed", "#2e7d32")])
         style.configure("TEntry", fieldbackground="#ffffff", foreground=fg,
                          bordercolor=border, lightcolor=border, darkcolor=border)
         style.configure("TCombobox", fieldbackground="#ffffff", foreground=fg,
@@ -1328,14 +1328,14 @@ class App(ttk.Frame):
         style.configure("TNotebook.Tab", background=secondary, foreground=fg,
                          padding=[12, 4], font=("Segoe UI", 9, "bold"))
         style.map("TNotebook.Tab", background=[("selected", sel), ("active", border)],
-                   foreground=[("selected", "#ffffff"), ("active", "#e65100")])
+                   foreground=[("selected", "#ffffff"), ("active", "#1b5e20")])
         style.configure("Horizontal.TProgressbar", background="#4caf50",
                          troughcolor=secondary, bordercolor=border,
-                         lightcolor="#4caf50", darkcolor="#f57c00")
+                         lightcolor="#4caf50", darkcolor="#2e7d32")
         style.configure("Treeview", background="#ffffff", foreground=fg,
                          fieldbackground="#ffffff", bordercolor=border)
-        style.map("Treeview", background=[("selected", "#ffe0b2")],
-                   foreground=[("selected", "#e65100")])
+        style.map("Treeview", background=[("selected", "#c8e6c9")],
+                   foreground=[("selected", "#1b5e20")])
         style.configure("Treeview.Heading", background="#4caf50", foreground="#ffffff",
                          bordercolor=border, font=("Segoe UI", 9, "bold"))
         style.layout("Treeview.Item", [("Treeitem.padding", {"sticky": "nswe"})])
@@ -1344,41 +1344,43 @@ class App(ttk.Frame):
         self.root.title("Recovery Works \u2022 Private Key Scanner & Balance Checker")
         self.root.geometry("1400x900")
         self.root.minsize(1100, 700)
-        self.root.configure(background="#fff8f0")
+        self.root.configure(background="#f5faf7")
 
-        container = tk.Frame(self.root, bg="#fff8f0")
+        container = tk.Frame(self.root, bg="#f5faf7")
         container.pack(fill=tk.BOTH, expand=True)
 
         # ── Header ──
-        header = tk.Frame(container, bg="#fff0e0", height=60, bd=0,
-                          highlightthickness=2, highlightbackground="#ffb74d")
+        header = tk.Frame(container, bg="#eaf5ed", height=60, bd=0,
+                          highlightthickness=0)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
+        # Subtle green bottom border
+        tk.Frame(header, bg="#4caf50", height=3).pack(side=tk.BOTTOM, fill=tk.X)
 
-        inner_h = tk.Frame(header, bg="#fff0e0")
+        inner_h = tk.Frame(header, bg="#eaf5ed")
         inner_h.pack(fill=tk.X, padx=20, pady=8)
 
         tk.Label(inner_h, text="\U0001f510  Recovery Works",
-                 font=("Segoe UI", 18, "bold"), fg="#f57c00", bg="#fff0e0").pack(side=tk.LEFT)
+                 font=("Segoe UI", 18, "bold"), fg="#2e7d32", bg="#eaf5ed").pack(side=tk.LEFT)
         tk.Label(inner_h, text="Key Scanner  \u00b7  Multi-Chain Balances  \u00b7  Full Secret Disclosure",
-                 font=("Segoe UI", 9), fg="#e65100", bg="#fff0e0").pack(side=tk.LEFT, padx=(15, 0))
+                 font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed").pack(side=tk.LEFT, padx=(15, 0))
 
         self.lbl_status_top = tk.Label(inner_h, text="\u25cf  Ready",
-                 font=("Segoe UI", 10, "bold"), fg="#f57c00", bg="#fff0e0")
+                 font=("Segoe UI", 10, "bold"), fg="#2e7d32", bg="#eaf5ed")
         self.lbl_status_top.pack(side=tk.RIGHT)
 
         # ── Control Bar ──
-        ctrl_frame = tk.Frame(container, bg="#fff0e0", height=48,
-                              highlightthickness=2, highlightbackground="#ffb74d")
+        ctrl_frame = tk.Frame(container, bg="#eaf5ed", height=48,
+                              highlightthickness=2, highlightbackground="#81c784")
         ctrl_frame.pack(fill=tk.X, pady=(0,0))
         ctrl_frame.pack_propagate(False)
 
-        inner_c = tk.Frame(ctrl_frame, bg="#fff0e0")
+        inner_c = tk.Frame(ctrl_frame, bg="#eaf5ed")
         inner_c.pack(fill=tk.X, padx=20, pady=6)
 
         self.btn_open = tk.Button(inner_c, text="\U0001f4c2  Open Folder",
-                 font=("Segoe UI", 9, "bold"), bg="#ff9800", fg="#ffffff",
-                 activebackground="#ffb74d", activeforeground="#ffffff",
+                 font=("Segoe UI", 9, "bold"), bg="#388e3c", fg="#ffffff",
+                 activebackground="#81c784", activeforeground="#ffffff",
                  relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
                  command=self.on_open_folder)
         self.btn_open.pack(side=tk.LEFT)
@@ -1397,35 +1399,35 @@ class App(ttk.Frame):
                  state=tk.DISABLED, command=self.on_stop_scan)
         self.btn_stop.pack(side=tk.LEFT, padx=(8,0))
 
-        sep = tk.Frame(inner_c, width=1, bg="#ffcc80", height=24)
+        sep = tk.Frame(inner_c, width=1, bg="#a5d6a7", height=24)
         sep.pack(side=tk.LEFT, padx=(12, 8))
 
         tk.Label(inner_c, text="Speed:", font=("Segoe UI", 8),
-                 fg="#e65100", bg="#fff0e0").pack(side=tk.LEFT)
+                 fg="#1b5e20", bg="#eaf5ed").pack(side=tk.LEFT)
 
         self.speed_var = tk.IntVar(value=3)
         self.speed_slider = tk.Scale(inner_c, from_=1, to=5, orient=tk.HORIZONTAL,
                  variable=self.speed_var, showvalue=False, length=80,
-                 bg="#fff0e0", fg="#e65100", troughcolor="#ffe0b2",
+                 bg="#eaf5ed", fg="#1b5e20", troughcolor="#c8e6c9",
                  activebackground="#4caf50", highlightthickness=0,
                  bd=0, sliderrelief=tk.FLAT, command=self._on_speed_change)
         self.speed_slider.pack(side=tk.LEFT, padx=(2, 2))
 
-        speed_labels = tk.Frame(inner_c, bg="#fff0e0")
+        speed_labels = tk.Frame(inner_c, bg="#eaf5ed")
         speed_labels.pack(side=tk.LEFT)
         tk.Label(speed_labels, text="Fast", font=("Segoe UI", 7),
-                 fg="#ff9800", bg="#fff0e0").pack(side=tk.LEFT)
+                 fg="#388e3c", bg="#eaf5ed").pack(side=tk.LEFT)
         tk.Label(speed_labels, text=" \u00b7 ", font=("Segoe UI", 7),
-                 fg="#ffcc80", bg="#fff0e0").pack(side=tk.LEFT)
+                 fg="#a5d6a7", bg="#eaf5ed").pack(side=tk.LEFT)
         tk.Label(speed_labels, text="Gentle", font=("Segoe UI", 7),
-                 fg="#ff9800", bg="#fff0e0").pack(side=tk.LEFT)
+                 fg="#388e3c", bg="#eaf5ed").pack(side=tk.LEFT)
 
         self.lbl_folder = tk.Label(inner_c, text="No folder selected",
-                 font=("Segoe UI", 9), fg="#e65100", bg="#fff0e0")
+                 font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed")
         self.lbl_folder.pack(side=tk.LEFT, padx=(15,0))
 
         self.lbl_progress = tk.Label(inner_c, text="",
-                 font=("Segoe UI", 9), fg="#e65100", bg="#fff0e0")
+                 font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed")
         self.lbl_progress.pack(side=tk.RIGHT, padx=(0,10))
 
         self.progress = ttk.Progressbar(inner_c, mode="determinate",
@@ -1433,7 +1435,7 @@ class App(ttk.Frame):
         self.progress.pack(side=tk.RIGHT, padx=(0,10))
 
         # ── Stats Bar ──
-        stats_frame = tk.Frame(container, bg="#fff8f0")
+        stats_frame = tk.Frame(container, bg="#f5faf7")
         stats_frame.pack(fill=tk.X, padx=20, pady=(6,0))
 
         self.stats_widgets = {}
@@ -1445,14 +1447,14 @@ class App(ttk.Frame):
             ("vaulted", "Vaulted Forever", "0"),
         ]
         for i, (key, label, default) in enumerate(stats_items):
-            f = tk.Frame(stats_frame, bg="#fff0e0", bd=0, highlightthickness=2,
-                         highlightbackground="#ffb74d", padx=16, pady=8)
-            f.pack(side=tk.LEFT, padx=(0,10))
-            tk.Label(f, text=label, font=("Segoe UI", 8), fg="#e65100",
-                     bg="#fff0e0").pack()
-            w = tk.Label(f, text=default, font=("Segoe UI", 16, "bold"),
-                         fg="#e65100", bg="#fff0e0")
-            w.pack()
+            f = tk.Frame(stats_frame, bg="#ffffff", bd=0, highlightthickness=1,
+                         highlightbackground="#c8e6c9", padx=18, pady=10)
+            f.pack(side=tk.LEFT, padx=(0,8))
+            tk.Label(f, text=label, font=("Segoe UI", 7, "bold"), fg="#81c784",
+                     bg="#ffffff").pack(anchor=tk.CENTER)
+            w = tk.Label(f, text=default, font=("Segoe UI", 18, "bold"),
+                         fg="#1b5e20", bg="#ffffff")
+            w.pack(anchor=tk.CENTER)
             self.stats_widgets[key] = w
 
         # ── Notebook ──
@@ -1463,38 +1465,38 @@ class App(ttk.Frame):
         self.tab_log = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_log, text="  Scanner  ")
 
-        log_frame = tk.Frame(self.tab_log, bg="#fff8f0")
+        log_frame = tk.Frame(self.tab_log, bg="#f5faf7")
         log_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         self.txt_log = tk.Text(log_frame, font=("Consolas", 10),
-                 bg="#ffffff", fg="#e65100", insertbackground="#f57c00",
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
                  relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.WORD,
                  state=tk.DISABLED)
         self.txt_log.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
 
         scroll_log = tk.Scrollbar(log_frame, command=self.txt_log.yview,
-                 bg="#ffe0b2", troughcolor="#fff0e0", bd=0)
+                 bg="#c8e6c9", troughcolor="#eaf5ed", bd=0)
         scroll_log.pack(fill=tk.Y, side=tk.RIGHT)
         self.txt_log.config(yscrollcommand=scroll_log.set)
 
-        self.txt_log.tag_config("info", foreground="#e65100")
-        self.txt_log.tag_config("success", foreground="#f57c00")
-        self.txt_log.tag_config("warning", foreground="#e65100")
+        self.txt_log.tag_config("info", foreground="#1b5e20")
+        self.txt_log.tag_config("success", foreground="#2e7d32")
+        self.txt_log.tag_config("warning", foreground="#1b5e20")
         self.txt_log.tag_config("error", foreground="#c62828")
-        self.txt_log.tag_config("highlight", foreground="#f57c00", font=("Consolas", 10, "bold"))
-        self.txt_log.tag_config("balance_pos", foreground="#e65100", font=("Consolas", 11, "bold"))
-        self.txt_log.tag_config("balance_zero", foreground="#8d6e63")
+        self.txt_log.tag_config("highlight", foreground="#2e7d32", font=("Consolas", 10, "bold"))
+        self.txt_log.tag_config("balance_pos", foreground="#1b5e20", font=("Consolas", 11, "bold"))
+        self.txt_log.tag_config("balance_zero", foreground="#90a4ae")
         self.txt_log.tag_config("bip39", foreground="#6a1b9a")
         self.txt_log.tag_config("pem", foreground="#1565c0")
-        self.txt_log.tag_config("wif", foreground="#e65100")
-        self.txt_log.tag_config("hex", foreground="#f57c00")
-        self.txt_log.tag_config("key_value", foreground="#e65100", font=("Consolas", 10, "bold"))
+        self.txt_log.tag_config("wif", foreground="#1b5e20")
+        self.txt_log.tag_config("hex", foreground="#2e7d32")
+        self.txt_log.tag_config("key_value", foreground="#1b5e20", font=("Consolas", 10, "bold"))
 
         # Tab 2: Results Table
         self.tab_results = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_results, text="  Results  ")
 
-        res_frame = tk.Frame(self.tab_results, bg="#fff8f0")
+        res_frame = tk.Frame(self.tab_results, bg="#f5faf7")
         res_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         columns = ("file", "key_type", "chain", "address", "balance", "usd")
@@ -1514,14 +1516,14 @@ class App(ttk.Frame):
         self.tree.column("balance", width=120, minwidth=90, anchor=tk.E)
         self.tree.column("usd", width=100, minwidth=80, anchor=tk.E)
 
-        self.tree.tag_configure("funded", foreground="#e65100", font=("Segoe UI", 10, "bold"))
-        self.tree.tag_configure("empty", foreground="#8d6e63")
+        self.tree.tag_configure("funded", foreground="#1b5e20", font=("Segoe UI", 10, "bold"))
+        self.tree.tag_configure("empty", foreground="#90a4ae")
         self.tree.tag_configure("error", foreground="#c62828")
 
         scroll_tree_y = tk.Scrollbar(res_frame, command=self.tree.yview,
-                 bg="#ffe0b2", troughcolor="#fff0e0", bd=0)
+                 bg="#c8e6c9", troughcolor="#eaf5ed", bd=0)
         scroll_tree_x = tk.Scrollbar(res_frame, orient=tk.HORIZONTAL,
-                 command=self.tree.xview, bg="#ffe0b2", troughcolor="#fff0e0", bd=0)
+                 command=self.tree.xview, bg="#c8e6c9", troughcolor="#eaf5ed", bd=0)
         self.tree.configure(yscrollcommand=scroll_tree_y.set,
                             xscrollcommand=scroll_tree_x.set)
 
@@ -1533,15 +1535,15 @@ class App(ttk.Frame):
         self.tab_history = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_history, text="  History  ")
 
-        hist_frame = tk.Frame(self.tab_history, bg="#fff8f0")
+        hist_frame = tk.Frame(self.tab_history, bg="#f5faf7")
         hist_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        btn_hist_row = tk.Frame(hist_frame, bg="#fff8f0")
+        btn_hist_row = tk.Frame(hist_frame, bg="#f5faf7")
         btn_hist_row.pack(fill=tk.X, pady=(0,6))
 
         tk.Button(btn_hist_row, text="\U0001f504  Refresh History",
-                 font=("Segoe UI", 9, "bold"), bg="#ff9800", fg="#ffffff",
-                 activebackground="#ffb74d", relief=tk.FLAT, padx=12, pady=2,
+                 font=("Segoe UI", 9, "bold"), bg="#388e3c", fg="#ffffff",
+                 activebackground="#81c784", relief=tk.FLAT, padx=12, pady=2,
                  cursor="hand2", command=self.refresh_history).pack(side=tk.LEFT)
         tk.Button(btn_hist_row, text="\U0001f5d1  Clear All Records",
                  font=("Segoe UI", 9, "bold"), bg="#c62828", fg="#ffffff",
@@ -1549,13 +1551,13 @@ class App(ttk.Frame):
                  cursor="hand2", command=self.clear_records).pack(side=tk.LEFT, padx=(8,0))
 
         self.txt_history = tk.Text(hist_frame, font=("Consolas", 9),
-                 bg="#ffffff", fg="#e65100", insertbackground="#f57c00",
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
                  relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.NONE,
                  state=tk.DISABLED)
         self.txt_history.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
 
         scroll_hist = tk.Scrollbar(hist_frame, command=self.txt_history.yview,
-                 bg="#ffe0b2", troughcolor="#fff0e0", bd=0)
+                 bg="#c8e6c9", troughcolor="#eaf5ed", bd=0)
         scroll_hist.pack(fill=tk.Y, side=tk.RIGHT)
         self.txt_history.config(yscrollcommand=scroll_hist.set)
 
@@ -1563,27 +1565,27 @@ class App(ttk.Frame):
         self.tab_vault = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_vault, text="  Vault  ")
 
-        vault_frame = tk.Frame(self.tab_vault, bg="#fff8f0")
+        vault_frame = tk.Frame(self.tab_vault, bg="#f5faf7")
         vault_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        btn_vault_row = tk.Frame(vault_frame, bg="#fff8f0")
+        btn_vault_row = tk.Frame(vault_frame, bg="#f5faf7")
         btn_vault_row.pack(fill=tk.X, pady=(0,6))
 
         tk.Button(btn_vault_row, text="\U0001f504  Refresh Vault",
-                 font=("Segoe UI", 9, "bold"), bg="#ff9800", fg="#ffffff",
-                 activebackground="#ffb74d", relief=tk.FLAT, padx=12, pady=2,
+                 font=("Segoe UI", 9, "bold"), bg="#388e3c", fg="#ffffff",
+                 activebackground="#81c784", relief=tk.FLAT, padx=12, pady=2,
                  cursor="hand2", command=self.refresh_vault).pack(side=tk.LEFT)
         tk.Label(btn_vault_row, text="  \u26a0 NEVER DELETED - permanent memory",
-                 font=("Segoe UI", 9), fg="#c62828", bg="#fff8f0").pack(side=tk.LEFT, padx=(10,0))
+                 font=("Segoe UI", 9), fg="#c62828", bg="#f5faf7").pack(side=tk.LEFT, padx=(10,0))
 
         self.txt_vault = tk.Text(vault_frame, font=("Consolas", 9),
-                 bg="#ffffff", fg="#e65100", insertbackground="#f57c00",
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
                  relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.WORD,
                  state=tk.DISABLED)
         self.txt_vault.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
 
         scroll_vault = tk.Scrollbar(vault_frame, command=self.txt_vault.yview,
-                 bg="#ffe0b2", troughcolor="#fff0e0", bd=0)
+                 bg="#c8e6c9", troughcolor="#eaf5ed", bd=0)
         scroll_vault.pack(fill=tk.Y, side=tk.RIGHT)
         self.txt_vault.config(yscrollcommand=scroll_vault.set)
 
@@ -1591,38 +1593,38 @@ class App(ttk.Frame):
         self.tab_wallet = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_wallet, text="  Wallet  ")
 
-        wallet_frame = tk.Frame(self.tab_wallet, bg="#fff8f0")
+        wallet_frame = tk.Frame(self.tab_wallet, bg="#f5faf7")
         wallet_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         # Left panel: import
-        left_panel = tk.Frame(wallet_frame, bg="#fff8f0")
+        left_panel = tk.Frame(wallet_frame, bg="#f5faf7")
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,4))
 
         tk.Label(left_panel, text="BULK IMPORT - Paste private keys or BIP39 phrases (one per line)",
-                 font=("Segoe UI", 9, "bold"), fg="#e65100", bg="#fff8f0").pack(anchor=tk.W)
+                 font=("Segoe UI", 9, "bold"), fg="#1b5e20", bg="#f5faf7").pack(anchor=tk.W)
 
         self.txt_import = tk.Text(left_panel, font=("Consolas", 9),
-                 bg="#ffffff", fg="#e65100", relief=tk.SUNKEN, bd=1,
+                 bg="#ffffff", fg="#1b5e20", relief=tk.SUNKEN, bd=1,
                  padx=8, pady=8, height=10, wrap=tk.WORD)
         self.txt_import.pack(fill=tk.BOTH, expand=True, pady=(4,4))
 
-        btn_row = tk.Frame(left_panel, bg="#fff8f0")
+        btn_row = tk.Frame(left_panel, bg="#f5faf7")
         btn_row.pack(fill=tk.X, pady=(0,4))
         tk.Button(btn_row, text="Import Keys",
-                 font=("Segoe UI", 10, "bold"), bg="#ff9800", fg="#ffffff",
-                 activebackground="#ffb74d", relief=tk.FLAT, padx=16, pady=4,
+                 font=("Segoe UI", 10, "bold"), bg="#388e3c", fg="#ffffff",
+                 activebackground="#81c784", relief=tk.FLAT, padx=16, pady=4,
                  cursor="hand2", command=self.wallet_import).pack(side=tk.LEFT)
         tk.Button(btn_row, text="Load from Vault",
-                 font=("Segoe UI", 10, "bold"), bg="#f57c00", fg="#ffffff",
-                 activebackground="#ff9800", relief=tk.FLAT, padx=16, pady=4,
+                 font=("Segoe UI", 10, "bold"), bg="#2e7d32", fg="#ffffff",
+                 activebackground="#388e3c", relief=tk.FLAT, padx=16, pady=4,
                  cursor="hand2", command=self.wallet_load_vault).pack(side=tk.LEFT, padx=(8,0))
 
         # Right panel: wallet list + send
-        right_panel = tk.Frame(wallet_frame, bg="#fff8f0")
+        right_panel = tk.Frame(wallet_frame, bg="#f5faf7")
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4,0))
 
         tk.Label(right_panel, text="IMPORTED WALLETS",
-                 font=("Segoe UI", 9, "bold"), fg="#e65100", bg="#fff8f0").pack(anchor=tk.W)
+                 font=("Segoe UI", 9, "bold"), fg="#1b5e20", bg="#f5faf7").pack(anchor=tk.W)
 
         columns_w = ("addr", "chain", "balance", "usd")
         self.tree_wallets = ttk.Treeview(right_panel, columns=columns_w,
@@ -1639,15 +1641,15 @@ class App(ttk.Frame):
 
         # Send section
         send_frame = tk.LabelFrame(right_panel, text=" SEND TRANSACTION ",
-                 font=("Segoe UI", 9, "bold"), fg="#e65100", bg="#fff8f0",
+                 font=("Segoe UI", 9, "bold"), fg="#1b5e20", bg="#f5faf7",
                  bd=1, relief=tk.GROOVE)
         send_frame.pack(fill=tk.X, pady=(4,0))
 
-        send_inner = tk.Frame(send_frame, bg="#fff8f0")
+        send_inner = tk.Frame(send_frame, bg="#f5faf7")
         send_inner.pack(fill=tk.X, padx=8, pady=6)
 
         tk.Label(send_inner, text="Chain:", font=("Segoe UI", 9),
-                 fg="#e65100", bg="#fff8f0").grid(row=0, column=0, sticky=tk.W, padx=(0,4))
+                 fg="#1b5e20", bg="#f5faf7").grid(row=0, column=0, sticky=tk.W, padx=(0,4))
         self.send_chain_var = tk.StringVar(value="Ethereum")
         chain_options = list(RPC_ENDPOINTS.keys())
         self.send_chain = ttk.Combobox(send_inner, textvariable=self.send_chain_var,
@@ -1655,20 +1657,20 @@ class App(ttk.Frame):
         self.send_chain.grid(row=0, column=1, sticky=tk.W, padx=(0,8))
 
         tk.Label(send_inner, text="To:", font=("Segoe UI", 9),
-                 fg="#e65100", bg="#fff8f0").grid(row=0, column=2, sticky=tk.W, padx=(0,4))
+                 fg="#1b5e20", bg="#f5faf7").grid(row=0, column=2, sticky=tk.W, padx=(0,4))
         self.send_to = tk.Entry(send_inner, font=("Consolas", 9), width=32,
                  relief=tk.SUNKEN, bd=1)
         self.send_to.grid(row=0, column=3, sticky=tk.EW, padx=(0,8))
 
         tk.Label(send_inner, text="Amount:", font=("Segoe UI", 9),
-                 fg="#e65100", bg="#fff8f0").grid(row=0, column=4, sticky=tk.W, padx=(0,4))
+                 fg="#1b5e20", bg="#f5faf7").grid(row=0, column=4, sticky=tk.W, padx=(0,4))
         self.send_amount = tk.Entry(send_inner, font=("Consolas", 9), width=12,
                  relief=tk.SUNKEN, bd=1)
         self.send_amount.grid(row=0, column=5, sticky=tk.W, padx=(0,8))
 
         tk.Button(send_inner, text="SEND",
-                 font=("Segoe UI", 10, "bold"), bg="#e65100", fg="#ffffff",
-                 activebackground="#f57c00", relief=tk.FLAT, padx=20, pady=4,
+                 font=("Segoe UI", 10, "bold"), bg="#1b5e20", fg="#ffffff",
+                 activebackground="#2e7d32", relief=tk.FLAT, padx=20, pady=4,
                  cursor="hand2", command=self.wallet_send).grid(row=0, column=6)
 
         send_inner.columnconfigure(3, weight=1)
@@ -1677,34 +1679,34 @@ class App(ttk.Frame):
         self._imported_wallets = []
 
         # ── Footer with resize grip ──
-        footer = tk.Frame(container, bg="#fff0e0", height=32,
-                          highlightthickness=2, highlightbackground="#ffb74d")
+        footer = tk.Frame(container, bg="#eaf5ed", height=32,
+                          highlightthickness=2, highlightbackground="#81c784")
         footer.pack(fill=tk.X, side=tk.BOTTOM)
         footer.pack_propagate(False)
 
         self.lbl_footer = tk.Label(footer,
                  text="\u2699  Ready to scan  |  0 keys found  |  0 funded",
-                 font=("Segoe UI", 9), fg="#e65100", bg="#fff0e0")
+                 font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed")
         self.lbl_footer.pack(side=tk.LEFT, padx=15)
 
         self.lbl_jsonl = tk.Label(footer,
                  text=f"\U0001f4be  {SCANNED_JSONL} / {BALANCE_JSONL}",
-                 font=("Segoe UI", 8), fg="#ff9800", bg="#fff0e0")
+                 font=("Segoe UI", 8), fg="#388e3c", bg="#eaf5ed")
         self.lbl_jsonl.pack(side=tk.RIGHT, padx=15)
 
-        resize_grip = tk.Frame(footer, bg="#ffb74d", width=20, height=20,
+        resize_grip = tk.Frame(footer, bg="#81c784", width=20, height=20,
                                 highlightthickness=0, cursor="bottom_right_corner")
         resize_grip.pack(side=tk.RIGHT, padx=(0, 0), pady=0)
         tk.Label(resize_grip, text="\u2b0a", font=("Segoe UI", 10),
-                 fg="#ffffff", bg="#ffb74d").pack()
+                 fg="#ffffff", bg="#81c784").pack()
 
         # ── Vault tags + initial count ──
         for txt in (self.txt_vault,):
-            txt.tag_config("key_value", foreground="#e65100", font=("Consolas", 10, "bold"))
-            txt.tag_config("balance_pos", foreground="#f57c00", font=("Consolas", 10, "bold"))
-            txt.tag_config("highlight", foreground="#f57c00", font=("Consolas", 9, "bold"))
-            txt.tag_config("info", foreground="#e65100")
-            txt.tag_config("warning", foreground="#e65100")
+            txt.tag_config("key_value", foreground="#1b5e20", font=("Consolas", 10, "bold"))
+            txt.tag_config("balance_pos", foreground="#2e7d32", font=("Consolas", 10, "bold"))
+            txt.tag_config("highlight", foreground="#2e7d32", font=("Consolas", 9, "bold"))
+            txt.tag_config("info", foreground="#1b5e20")
+            txt.tag_config("warning", foreground="#1b5e20")
         # Set initial vaulted count from permanent file
         vault_recs = jsonl_read_all(VAULT_JSONL)
         self.stats_widgets["vaulted"].config(text=str(len(vault_recs)))
@@ -1734,7 +1736,7 @@ class App(ttk.Frame):
         self.btn_stop.config(state=tk.NORMAL)
         self.btn_open.config(state=tk.DISABLED)
         self.progress["value"] = 0
-        self.lbl_status_top.config(text="\u25cf  Scanning...", fg="#e65100", bg="#fff0e0")
+        self.lbl_status_top.config(text="\u25cf  Scanning...", fg="#1b5e20", bg="#eaf5ed")
         self.txt_log.config(state=tk.NORMAL)
         self.txt_log.delete("1.0", tk.END)
         self.txt_log.config(state=tk.DISABLED)
@@ -1786,7 +1788,7 @@ class App(ttk.Frame):
                 curr = 0
             self.stats_widgets["vaulted"].config(text=str(curr + 1))
         if "complete" in message.lower():
-            self.lbl_status_top.config(text="\u25cf  Ready", fg="#f57c00")
+            self.lbl_status_top.config(text="\u25cf  Ready", fg="#2e7d32")
             self.btn_scan.config(state=tk.NORMAL)
             self.btn_stop.config(state=tk.DISABLED)
             self.btn_open.config(state=tk.NORMAL)
