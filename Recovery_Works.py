@@ -85,6 +85,7 @@ _ANKR_KEY = "686c37d4360af4d79afda6313ea426fef99f5c4320b380589ccb2c93d830112e"
 
 SCANNED_JSONL = "scanned_records.jsonl"
 BALANCE_JSONL = "balance_records.jsonl"
+VAULT_JSONL   = "permanent_vault.jsonl"   # NEVER cleared — permanent memory
 
 # ── EVM Chains (each has [primary_rpc, fallback_rpc, ...]) ──
 RPC_ENDPOINTS = OrderedDict([
@@ -1158,6 +1159,51 @@ class ScannerEngine:
                                         chain="Solana", balance=bal, address=sol_addr)
                         time.sleep(0.15 + throttle)
 
+                    # ── PERMANENT VAULT: write consolidated record for funded keys ──
+                    funded_entries = []
+                    total_vault_usd = Decimal("0")
+                    # Re-read all balances just written for this key
+                    all_recs = jsonl_read_all(BALANCE_JSONL)
+                    key_file = rel_path
+                    for rec in all_recs:
+                        if rec.get("file") == key_file and rec.get("type") == "BALANCE":
+                            bal_str = rec.get("balance", "0")
+                            try:
+                                bal_dec = Decimal(bal_str)
+                            except Exception:
+                                bal_dec = Decimal("0")
+                            if bal_dec > Decimal("0"):
+                                usd_dec = Decimal(rec.get("usd", "0"))
+                                funded_entries.append({
+                                    "chain": rec.get("chain", "?"),
+                                    "address": rec.get("address", "?"),
+                                    "balance": bal_str,
+                                    "usd": str(usd_dec),
+                                })
+                                total_vault_usd += usd_dec
+                    if funded_entries:
+                        vault_record = {
+                            "type": "VAULT",
+                            "file": rel_path,
+                            "key_type": key_type,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                        # Store the full secret
+                        if key_type == "BIP39":
+                            vault_record["secret_bip39"] = key_data
+                        elif isinstance(key_data, bytes):
+                            vault_record["secret_hex"] = key_data.hex()
+                        else:
+                            vault_record["secret_raw"] = str(key_data)
+                        # Store all derived addresses
+                        vault_record["addresses"] = {k: v for k, v in addresses.items() if v and v != "?"}
+                        # Store funded balances
+                        vault_record["funded"] = funded_entries
+                        vault_record["total_usd"] = str(total_vault_usd)
+                        jsonl_append(VAULT_JSONL, vault_record)
+                        if self.status_cb:
+                            self.status_cb(f"PERMANENT VAULT: {len(funded_entries)} funded chains, ${total_vault_usd} total — saved to {VAULT_JSONL}")
+
         if self.status_cb:
             self.status_cb(f"Scan complete. Files: {self.scanned_count}, Keys: {self.found_keys}")
         self.running = False
@@ -1351,6 +1397,7 @@ class App(ttk.Frame):
             ("keys", "Keys Found", "0"),
             ("funded", "Funded Wallets", "0"),
             ("total_usd", "Total $USD Owned", "$0.00"),
+            ("vaulted", "Vaulted Forever", "0"),
         ]
         for i, (key, label, default) in enumerate(stats_items):
             f = tk.Frame(stats_frame, bg="#e8f5e9", bd=0, highlightthickness=2,
@@ -1467,6 +1514,34 @@ class App(ttk.Frame):
         scroll_hist.pack(fill=tk.Y, side=tk.RIGHT)
         self.txt_history.config(yscrollcommand=scroll_hist.set)
 
+        # Tab 4: Permanent Vault
+        self.tab_vault = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_vault, text="  Vault  ")
+
+        vault_frame = tk.Frame(self.tab_vault, bg="#f5faf5")
+        vault_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        btn_vault_row = tk.Frame(vault_frame, bg="#f5faf5")
+        btn_vault_row.pack(fill=tk.X, pady=(0,6))
+
+        tk.Button(btn_vault_row, text="\U0001f504  Refresh Vault",
+                 font=("Segoe UI", 9, "bold"), bg="#66bb6a", fg="#ffffff",
+                 activebackground="#81c784", relief=tk.FLAT, padx=12, pady=2,
+                 cursor="hand2", command=self.refresh_vault).pack(side=tk.LEFT)
+        tk.Label(btn_vault_row, text="  \u26a0 NEVER DELETED - permanent memory",
+                 font=("Segoe UI", 9), fg="#c62828", bg="#f5faf5").pack(side=tk.LEFT, padx=(10,0))
+
+        self.txt_vault = tk.Text(vault_frame, font=("Consolas", 9),
+                 bg="#ffffff", fg="#1b5e20", insertbackground="#2e7d32",
+                 relief=tk.SUNKEN, bd=1, padx=8, pady=8, wrap=tk.WORD,
+                 state=tk.DISABLED)
+        self.txt_vault.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        scroll_vault = tk.Scrollbar(vault_frame, command=self.txt_vault.yview,
+                 bg="#c8e6c9", troughcolor="#e8f5e9", bd=0)
+        scroll_vault.pack(fill=tk.Y, side=tk.RIGHT)
+        self.txt_vault.config(yscrollcommand=scroll_vault.set)
+
         # ── Footer with resize grip ──
         footer = tk.Frame(container, bg="#e8f5e9", height=32,
                           highlightthickness=2, highlightbackground="#81c784")
@@ -1488,6 +1563,17 @@ class App(ttk.Frame):
         resize_grip.pack(side=tk.RIGHT, padx=(0, 0), pady=0)
         tk.Label(resize_grip, text="\u2b0a", font=("Segoe UI", 10),
                  fg="#ffffff", bg="#81c784").pack()
+
+        # ── Vault tags + initial count ──
+        for txt in (self.txt_vault,):
+            txt.tag_config("key_value", foreground="#1b5e20", font=("Consolas", 10, "bold"))
+            txt.tag_config("balance_pos", foreground="#2e7d32", font=("Consolas", 10, "bold"))
+            txt.tag_config("highlight", foreground="#2e7d32", font=("Consolas", 9, "bold"))
+            txt.tag_config("info", foreground="#558b2f")
+            txt.tag_config("warning", foreground="#e65100")
+        # Set initial vaulted count from permanent file
+        vault_recs = jsonl_read_all(VAULT_JSONL)
+        self.stats_widgets["vaulted"].config(text=str(len(vault_recs)))
 
     # ── GUI Actions ──
 
@@ -1521,6 +1607,10 @@ class App(ttk.Frame):
         for key, w in self.stats_widgets.items():
             if key == "total_usd":
                 w.config(text="$0.00")
+            elif key == "vaulted":
+                # NEVER reset — count from permanent file
+                existing = jsonl_read_all(VAULT_JSONL)
+                w.config(text=str(len(existing)))
             else:
                 w.config(text="0")
         for item in self.tree.get_children():
@@ -1554,6 +1644,13 @@ class App(ttk.Frame):
 
     def _update_status(self, message: str):
         self.lbl_footer.config(text=f"\u2699  {message}")
+        # Detect vault writes: message starts with "PERMANENT VAULT:"
+        if message.startswith("PERMANENT VAULT:"):
+            try:
+                curr = int(self.stats_widgets["vaulted"]["text"])
+            except Exception:
+                curr = 0
+            self.stats_widgets["vaulted"].config(text=str(curr + 1))
         if "complete" in message.lower():
             self.lbl_status_top.config(text="\u25cf  Ready", fg="#2e7d32")
             self.btn_scan.config(state=tk.NORMAL)
@@ -1697,9 +1794,48 @@ class App(ttk.Frame):
         self.txt_history.config(state=tk.DISABLED)
         self.log("info", f"Loaded {len(records)} historical records")
 
+    def refresh_vault(self):
+        """Load and display permanent vault records."""
+        self.txt_vault.config(state=tk.NORMAL)
+        self.txt_vault.delete("1.0", tk.END)
+        records = jsonl_read_all(VAULT_JSONL)
+        if not records:
+            self.txt_vault.insert(tk.END, "Vault is empty. Funded secrets will appear here forever.\n", "info")
+        else:
+            for r in records:
+                # Show a compact but complete summary
+                secret = r.get("secret_bip39") or r.get("secret_hex") or r.get("secret_raw", "?")
+                if len(str(secret)) > 60:
+                    secret_display = str(secret)[:60] + "..."
+                else:
+                    secret_display = str(secret)
+                self.txt_vault.insert(tk.END, f"SECRET: {secret_display}\n", "key_value")
+                self.txt_vault.insert(tk.END, f"  Type: {r.get('key_type','?')}  |  File: {r.get('file','?')}\n", "info")
+                self.txt_vault.insert(tk.END, f"  Time: {r.get('timestamp','?')}\n", "info")
+                addrs = r.get("addresses", {})
+                if addrs:
+                    self.txt_vault.insert(tk.END, "  Addresses:\n", "highlight")
+                    for k, v in addrs.items():
+                        self.txt_vault.insert(tk.END, f"    {k}: {v}\n", "info")
+                funded = r.get("funded", [])
+                total = r.get("total_usd", "0")
+                self.txt_vault.insert(tk.END, f"  FUNDED ({len(funded)} chains, ${total} total):\n", "balance_pos")
+                for fb in funded:
+                    self.txt_vault.insert(tk.END,
+                        f"    {fb['chain']}: {fb['balance']} @ {fb['address']} = ${fb['usd']}\n", "balance_pos")
+                self.txt_vault.insert(tk.END, f"  FULL SECRET: {secret}\n", "key_value")
+                self.txt_vault.insert(tk.END, "\n" + "-"*60 + "\n\n")
+        self.txt_vault.config(state=tk.DISABLED)
+        # Update vaulted count
+        try:
+            self.stats_widgets["vaulted"].config(text=str(len(records)))
+        except Exception:
+            pass
+        self.log("info", f"Vault: {len(records)} permanent records loaded")
+
     def clear_records(self):
         if messagebox.askyesno("Clear Records",
-                "Delete all scanned and balance records?\nThis cannot be undone."):
+                "Delete scan/balance records?\n\nVAULT records are PERMANENT and will NOT be deleted.\nThis cannot be undone."):
             for fp in (SCANNED_JSONL, BALANCE_JSONL):
                 if os.path.exists(fp):
                     try:
@@ -1707,7 +1843,7 @@ class App(ttk.Frame):
                     except Exception:
                         pass
             self.refresh_history()
-            self.log("warning", "All records cleared")
+            self.log("warning", "Scan/balance records cleared (vault preserved)")
 
     def on_closing(self):
         self.engine.stop()
