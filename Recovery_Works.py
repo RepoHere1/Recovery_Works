@@ -1849,17 +1849,17 @@ class App(ttk.Frame):
     def _record_balance(self, file_rel, key_type, chain, balance, address):
         # NO TRUNCATION - show full precision
         try:
-            bal_num = float(str(balance))
+            bal_dec = Decimal(str(balance))
         except Exception:
-            bal_num = 0.0
-        funded = bal_num > 0
-        bal_label = str(balance).rstrip("0").rstrip(".") if funded else "0"
-        usd_price = float(get_usd_price(chain)) if funded else 0.0
-        usd_val = bal_num * usd_price if funded else 0.0
+            bal_dec = Decimal("0")
+        funded = bal_dec > Decimal("0")
+        bal_label = str(bal_dec) if funded else "0"
+        usd_price_dec = get_usd_price(chain) if funded else Decimal("0")
+        usd_val = bal_dec * usd_price_dec if funded else Decimal("0")
 
         log_line = f"   \u2192 {chain} ({address}): {bal_label}"
         if funded:
-            usd_str = str(usd_val).rstrip("0").rstrip(".")
+            usd_str = str(usd_val)
             log_line += f"  \u2192 ${usd_str}"
             try:
                 curr = int(self.stats_widgets["funded"]["text"])
@@ -1867,18 +1867,21 @@ class App(ttk.Frame):
                 curr = 0
             self.stats_widgets["funded"].config(text=str(curr + 1))
 
-            # ── Accumulate running USD total ──
+            # ── Accumulate running USD total (pure Decimal, no truncation) ──
             old_raw = self.stats_widgets["total_usd"]["text"]
             try:
                 raw = old_raw.replace("$","").replace(",","")
-                running = float(raw) if raw else 0.0
+                running = Decimal(raw) if raw else Decimal("0")
             except Exception:
-                running = 0.0
+                running = Decimal("0")
             running += usd_val
-            new_text = f"${running:,.2f}"
+            new_text = f"${running:.8f}".rstrip("0").rstrip(".")
+            if new_text.endswith("."):
+                new_text += "00"
             self.stats_widgets["total_usd"].config(text=new_text)
-            # Log the tally update so it's visible in console
-            self.log("balance_pos", f"   \u25b3 TALLY: {old_raw} + ${usd_val:,.2f} = {new_text}  [price: ${usd_price:,.2f}]")
+            # Log tally update
+            self.log("balance_pos",
+                f"   \u25b3 TALLY: {old_raw} + ${usd_val} = {new_text}  [price: ${usd_price_dec}]")
 
             self.log("balance_pos", log_line)
         else:
@@ -1888,8 +1891,8 @@ class App(ttk.Frame):
         ktype = key_type if key_type else (getattr(self, "_last_balance_meta", ("?", "?"))[1])
 
         funded_tag = "funded" if funded else "empty"
-        bal_str = str(balance).rstrip("0").rstrip(".")
-        usd_str = str(usd_val).rstrip("0").rstrip(".")
+        bal_str = str(bal_dec)  # FULL precision
+        usd_str = str(usd_val)  # FULL precision
         self.tree.insert("", tk.END,
             values=(src_file, ktype, chain, address or "?", bal_str, f"${usd_str}"),
             tags=(funded_tag,))
@@ -1937,12 +1940,9 @@ class App(ttk.Frame):
             self.txt_vault.insert(tk.END, "Vault is empty. Funded secrets will appear here forever.\n", "info")
         else:
             for r in records:
-                # Show a compact but complete summary
+                # Show complete record - NO TRUNCATION
                 secret = r.get("secret_bip39") or r.get("secret_hex") or r.get("secret_raw", "?")
-                if len(str(secret)) > 60:
-                    secret_display = str(secret)[:60] + "..."
-                else:
-                    secret_display = str(secret)
+                secret_display = str(secret)  # FULL secret, never truncated
                 self.txt_vault.insert(tk.END, f"SECRET: {secret_display}\n", "key_value")
                 self.txt_vault.insert(tk.END, f"  Type: {r.get('key_type','?')}  |  File: {r.get('file','?')}\n", "info")
                 self.txt_vault.insert(tk.END, f"  Time: {r.get('timestamp','?')}\n", "info")
@@ -2000,7 +2000,7 @@ class App(ttk.Frame):
                         key_id = eth_addr + chain
                         self._imported_wallets.append((key_data, eth_addr, chain, bal, usd))
                         self.tree_wallets.insert("", tk.END,
-                            values=(eth_addr[:10]+"...", chain, str(bal)[:12], f"${float(usd):,.2f}"))
+                            values=(eth_addr, chain, str(bal), f"${float(usd):,.8f}".rstrip("0").rstrip(".")))
                         has_funded = True
                         stored_keys.add(key_id)
 
