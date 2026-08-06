@@ -1350,6 +1350,7 @@ class App(ttk.Frame):
             ("files", "Files Scanned", "0"),
             ("keys", "Keys Found", "0"),
             ("funded", "Funded Wallets", "0"),
+            ("total_usd", "Total $USD Owned", "$0.00"),
         ]
         for i, (key, label, default) in enumerate(stats_items):
             f = tk.Frame(stats_frame, bg="#e8f5e9", bd=0, highlightthickness=2,
@@ -1516,8 +1517,11 @@ class App(ttk.Frame):
         self.txt_log.config(state=tk.NORMAL)
         self.txt_log.delete("1.0", tk.END)
         self.txt_log.config(state=tk.DISABLED)
-        for w in self.stats_widgets.values():
-            w.config(text="0")
+        for key, w in self.stats_widgets.items():
+            if key == "total_usd":
+                w.config(text="$0.00")
+            else:
+                w.config(text="0")
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -1620,6 +1624,17 @@ class App(ttk.Frame):
             except Exception:
                 curr = 0
             self.stats_widgets["funded"].config(text=str(curr + 1))
+
+            # ── Accumulate running USD total ──
+            try:
+                raw = self.stats_widgets["total_usd"]["text"].replace("$","").replace(",","")
+                running = float(raw)
+            except Exception:
+                running = 0.0
+            running += usd_val
+            total_usd_str = f"${running:,.2f}"
+            self.stats_widgets["total_usd"].config(text=total_usd_str)
+
             self.log("balance_pos", log_line)
         else:
             self.log("balance_zero", log_line)
@@ -1642,8 +1657,9 @@ class App(ttk.Frame):
             fc = int(self.stats_widgets["funded"]["text"])
         except Exception:
             fc = 0
+        total_usd = self.stats_widgets["total_usd"]["text"]
         self.lbl_footer.config(
-            text=f"\u2699  {kc} keys  |  {fc} funded  |  checking {chain}...")
+            text=f"\u2699  {kc} keys  |  {fc} funded  |  {total_usd} total  |  checking {chain}...")
 
     def log(self, tag: str, message: str, extra: str = ""):
         self.txt_log.config(state=tk.NORMAL)
