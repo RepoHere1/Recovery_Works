@@ -1623,7 +1623,8 @@ class App(ttk.Frame):
             bal_num = 0.0
         funded = bal_num > 0
         bal_label = str(balance).rstrip("0").rstrip(".") if funded else "0"
-        usd_val = bal_num * float(get_usd_price(chain)) if funded else 0.0
+        usd_price = float(get_usd_price(chain)) if funded else 0.0
+        usd_val = bal_num * usd_price if funded else 0.0
 
         log_line = f"   \u2192 {chain} ({address}): {bal_label}"
         if funded:
@@ -1636,16 +1637,17 @@ class App(ttk.Frame):
             self.stats_widgets["funded"].config(text=str(curr + 1))
 
             # ── Accumulate running USD total ──
+            old_raw = self.stats_widgets["total_usd"]["text"]
             try:
-                raw = self.stats_widgets["total_usd"]["text"].replace("$","").replace(",","")
+                raw = old_raw.replace("$","").replace(",","")
                 running = float(raw) if raw else 0.0
             except Exception:
                 running = 0.0
             running += usd_val
-            try:
-                self.stats_widgets["total_usd"].config(text=f"${running:,.2f}")
-            except Exception:
-                pass
+            new_text = f"${running:,.2f}"
+            self.stats_widgets["total_usd"].config(text=new_text)
+            # Log the tally update so it's visible in console
+            self.log("balance_pos", f"   \u25b3 TALLY: {old_raw} + ${usd_val:,.2f} = {new_text}  [price: ${usd_price:,.2f}]")
 
             self.log("balance_pos", log_line)
         else:
