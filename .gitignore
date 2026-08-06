@@ -5,3 +5,4 @@ __pycache__/
 *.jsonl
 recovered_portfolio.csv
 Scripts/check_imports.py
+.env
