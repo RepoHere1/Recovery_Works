@@ -26,6 +26,7 @@ from decimal import Decimal, getcontext
 getcontext().prec = 50  # maximum precision, no truncation ever
 
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bip_utils import (
     Bip39SeedGenerator, Bip39MnemonicValidator, Bip39MnemonicGenerator,
     Bip44, Bip44Coins, Bip49, Bip49Coins, Bip84, Bip84Coins,
@@ -712,7 +713,7 @@ def derive_all_addresses(key_type: str, key_data):
 # BALANCE CHECKERS - LIVE RPC, NO MOCKS, NO FAKES, NO TRUNCATION
 # ═══════════════════════════════════════════════════════════════
 
-def _rpc_post(urls, payload, timeout=12):
+def _rpc_post(urls, payload, timeout=8):
     """Try multiple RPC URLs in order; return response or None."""
     if isinstance(urls, str):
         urls = [urls]
@@ -726,7 +727,7 @@ def _rpc_post(urls, payload, timeout=12):
             continue
     return None
 
-def _rpc_get(urls, timeout=12):
+def _rpc_get(urls, timeout=8):
     """GET request with fallback URLs."""
     if isinstance(urls, str):
         urls = [urls]
@@ -761,7 +762,7 @@ def check_btc_balance(address):
     if not address or address == "?":
         return Decimal("0")
     try:
-        resp = requests.get(f"{BTC_API}{address}", timeout=12)
+        resp = requests.get(f"{BTC_API}{address}", timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if address in data:
@@ -797,7 +798,7 @@ def check_tron_balance(address):
         return Decimal("0")
     for rpc in TRON_RPCS:
         try:
-            resp = requests.get(f"{rpc}/v1/accounts/{address}", timeout=12)
+            resp = requests.get(f"{rpc}/v1/accounts/{address}", timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 if "data" in data and len(data["data"]) > 0:
@@ -815,7 +816,7 @@ def check_xrp_balance(address):
         try:
             payload = {"method": "account_info",
                        "params": [{"account": address, "strict": True, "ledger_index": "current"}]}
-            resp = requests.post(rpc, json=payload, timeout=12)
+            resp = requests.post(rpc, json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 bal = data.get("result", {}).get("account_data", {}).get("Balance", "0")
@@ -830,7 +831,7 @@ def check_cardano_balance(address):
         return Decimal("0")
     for rpc in CARDANO_RPCS:
         try:
-            resp = requests.get(f"{rpc}/addresses/{address}", timeout=12)
+            resp = requests.get(f"{rpc}/addresses/{address}", timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 lovelace = 0
@@ -849,7 +850,7 @@ def check_cosmos_balance(address):
     for rpc in COSMOS_RPCS:
         try:
             resp = requests.get(
-                f"{rpc}/cosmos/bank/v1beta1/balances/{address}", timeout=12)
+                f"{rpc}/cosmos/bank/v1beta1/balances/{address}", timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 for b in data.get("balances", []):
@@ -866,7 +867,7 @@ def check_polkadot_balance(address):
         return Decimal("0")
     for rpc in POLKADOT_RPCS:
         try:
-            resp = requests.get(f"{rpc}/accounts/{address}/balance-info", timeout=12)
+            resp = requests.get(f"{rpc}/accounts/{address}/balance-info", timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 free = str(data.get("free", "0"))
@@ -884,7 +885,7 @@ def check_near_balance(address):
             payload = {"jsonrpc": "2.0", "id": 1, "method": "query",
                        "params": {"request_type": "view_account",
                                   "finality": "final", "account_id": address}}
-            resp = requests.post(rpc, json=payload, timeout=12)
+            resp = requests.post(rpc, json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 yocto = data.get("result", {}).get("amount", "0")
@@ -900,7 +901,7 @@ def check_sui_balance(address):
     for rpc in SUI_RPCS:
         try:
             payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [address]}
-            resp = requests.post(rpc, json=payload, timeout=12)
+            resp = requests.post(rpc, json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 mist = int(data.get("result", {}).get("totalBalance", "0"))
@@ -917,7 +918,7 @@ def check_aptos_balance(address):
         try:
             resp = requests.get(
                 f"{rpc}/v1/accounts/{address}/resource/0x1::coin::CoinStore%3C0x1::aptos_coin::AptosCoin%3E",
-                timeout=12)
+                timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 octa = int(data.get("data", {}).get("coin", {}).get("value", "0"))
@@ -932,7 +933,7 @@ def _check_utxo_balance(address, api_urls, divisor):
         return Decimal("0")
     for url in api_urls:
         try:
-            resp = requests.get(f"{url}/address/{address}", timeout=12)
+            resp = requests.get(f"{url}/address/{address}", timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 funded = data.get("chain_stats", {}).get("funded_txo_sum", 0)
@@ -1044,7 +1045,6 @@ class ScannerEngine:
         self.scanned_count = 0
         self.found_keys = 0
         self.throttle_ms = 0
-        self._rpc_sem = threading.Semaphore(4)
         self._file_sem = threading.Semaphore(2)
 
     def scan_folder(self, folder_path: str):
@@ -1073,7 +1073,7 @@ class ScannerEngine:
                 self.status_cb(f"Scanning ({self.scanned_count}/{total}): {os.path.basename(filepath)}")
 
             if total > 100 and self.scanned_count % 50 == 0:
-                time.sleep(0.01)
+                pass  # no delay — full speed
 
             keys = scan_file_for_keys(filepath)
             if keys:
@@ -1110,11 +1110,45 @@ class ScannerEngine:
 
                     fetch_usd_prices()
 
-                    def check_and_record(chain, addr, checker_fn):
-                        with self._rpc_sem:
-                            bal = checker_fn(addr)
-                        if bal is None:
-                            bal = Decimal("0")
+                    # ── Build all chain check tasks ──
+                    tasks = []  # (chain_label, address, checker_fn)
+
+                    eth_addr = addresses.get("ETH", "?")
+                    if eth_addr and eth_addr != "?" and eth_addr.startswith("0x"):
+                        for chain, rpc_list in RPC_ENDPOINTS.items():
+                            tasks.append((chain, eth_addr,
+                                lambda rl=rpc_list, a=eth_addr: check_evm_balance(rl, a)))
+
+                    for btc_type in ["BTC-legacy", "BTC-segwit", "BTC-native"]:
+                        btc_addr = addresses.get(btc_type, "?")
+                        if btc_addr and btc_addr != "?":
+                            tasks.append(("Bitcoin", btc_addr,
+                                lambda a=btc_addr: check_btc_balance(a)))
+
+                    sol_addr = addresses.get("SOL", "?")
+                    if sol_addr and sol_addr != "?":
+                        tasks.append(("Solana", sol_addr,
+                            lambda a=sol_addr: check_sol_balance(a)))
+
+                    # ── Fire ALL RPC calls in parallel (12 workers) ──
+                    collected = []  # (chain, address, balance)
+                    if tasks:
+                        with ThreadPoolExecutor(max_workers=12) as pool:
+                            future_map = {}
+                            for chain, addr, fn in tasks:
+                                future_map[pool.submit(fn)] = (chain, addr)
+                            for future in as_completed(future_map):
+                                chain, addr = future_map[future]
+                                try:
+                                    bal = future.result(timeout=15)
+                                except Exception:
+                                    bal = Decimal("0")
+                                if bal is None:
+                                    bal = Decimal("0")
+                                collected.append((chain, addr, bal))
+
+                    # ── Record all results and send to GUI ──
+                    for chain, addr, bal in collected:
                         usd = bal * get_usd_price(chain)
                         bal_record = {
                             "type": "BALANCE",
@@ -1127,37 +1161,9 @@ class ScannerEngine:
                             "timestamp": datetime.utcnow().isoformat(),
                         }
                         jsonl_append(BALANCE_JSONL, bal_record)
-                        return bal
-
-                    # ETH -> check ALL EVM chains
-                    eth_addr = addresses.get("ETH", "?")
-                    if eth_addr and eth_addr != "?" and eth_addr.startswith("0x"):
-                        for chain, rpc_list in RPC_ENDPOINTS.items():
-                            bal = check_and_record(chain, eth_addr,
-                                lambda a, rl=rpc_list: check_evm_balance(rl, a))
-                            if self.key_cb:
-                                self.key_cb(rel_path, key_type, None, None,
-                                            chain=chain, balance=bal, address=eth_addr)
-                            time.sleep(0.15 + throttle)
-
-                    # BTC addresses
-                    for btc_type in ["BTC-legacy", "BTC-segwit", "BTC-native"]:
-                        btc_addr = addresses.get(btc_type, "?")
-                        if btc_addr and btc_addr != "?":
-                            bal = check_and_record("Bitcoin", btc_addr, lambda a: check_btc_balance(a))
-                            if self.key_cb:
-                                self.key_cb(rel_path, key_type, None, None,
-                                            chain="Bitcoin", balance=bal, address=btc_addr)
-                            time.sleep(0.15 + throttle)
-
-                    # Solana
-                    sol_addr = addresses.get("SOL", "?")
-                    if sol_addr and sol_addr != "?":
-                        bal = check_and_record("Solana", sol_addr, lambda a: check_sol_balance(a))
                         if self.key_cb:
                             self.key_cb(rel_path, key_type, None, None,
-                                        chain="Solana", balance=bal, address=sol_addr)
-                        time.sleep(0.15 + throttle)
+                                        chain=chain, balance=bal, address=addr)
 
                     # ── PERMANENT VAULT: write consolidated record for funded keys ──
                     funded_entries = []
