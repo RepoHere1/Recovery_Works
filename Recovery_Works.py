@@ -1509,6 +1509,7 @@ class App(ttk.Frame):
     def on_start_scan(self):
         if not self.active_folder:
             return
+
         self.btn_scan.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.btn_open.config(state=tk.DISABLED)
@@ -1524,6 +1525,15 @@ class App(ttk.Frame):
                 w.config(text="0")
         for item in self.tree.get_children():
             self.tree.delete(item)
+
+        # ── Pre-fetch USD prices before scan starts ──
+        self.log("info", "\u25cf Fetching live USD prices from CoinGecko...")
+        fetch_usd_prices()
+        price_count = sum(1 for v in _usd_prices.values() if float(str(v)) > 0)
+        if price_count > 0:
+            self.log("success", f"\u25cf  Prices loaded for {price_count} chains")
+        else:
+            self.log("warning", "\u25cf  WARNING: No USD prices loaded - tally will show $0.00")
 
         self._on_speed_change(self.speed_var.get())
 
@@ -1628,12 +1638,14 @@ class App(ttk.Frame):
             # ── Accumulate running USD total ──
             try:
                 raw = self.stats_widgets["total_usd"]["text"].replace("$","").replace(",","")
-                running = float(raw)
+                running = float(raw) if raw else 0.0
             except Exception:
                 running = 0.0
             running += usd_val
-            total_usd_str = f"${running:,.2f}"
-            self.stats_widgets["total_usd"].config(text=total_usd_str)
+            try:
+                self.stats_widgets["total_usd"].config(text=f"${running:,.2f}")
+            except Exception:
+                pass
 
             self.log("balance_pos", log_line)
         else:
