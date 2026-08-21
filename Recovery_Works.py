@@ -635,6 +635,192 @@ def private_key_to_sol_address(private_bytes: bytes) -> str:
         except Exception:
             return "?"
 
+def _derive_fork_addresses(priv_bytes):
+    """Derive BTC-family + TRON addresses from a raw private key.
+
+    Uses the compressed secp256k1 public key for p2pkh (version-byte per
+    chain) and keccak for TRON. Returns a dict of chain-label -> address.
+    These are the non-EVM chains the scanner balance-checks.
+    """
+    out = {}
+    if not _validate_private_key(priv_bytes):
+        return out
+    try:
+        from bitcoinlib.keys import Key
+        k = Key(import_key=priv_bytes.hex()[:64])
+        pub = bytes.fromhex(k.public_hex)  # compressed public key (33 bytes)
+        h160 = hashlib.new("ripemd160", hashlib.sha256(pub).digest()).digest()
+        def p2pkh(version_prefix):
+            payload = version_prefix + h160
+            checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+            return base58.b58encode(payload + checksum).decode()
+        out["Litecoin"] = p2pkh(b"\x30")
+        out["Dogecoin"] = p2pkh(b"\x1E")
+        out["Bitcoin Cash"] = p2pkh(b"\x00")   # legacy BCH shares the BTC p2pkh format
+        out["Dash"] = p2pkh(b"\x4C")
+        out["Zcash"] = p2pkh(b"\x1C\xB8")
+    except Exception:
+        pass
+    try:
+        from eth_keys import keys as _ek
+        pk = _ek.PrivateKey(priv_bytes[:32])
+        tpub = pk.public_key.to_bytes()
+        out["TRON"] = base58.b58encode_check(
+            b"\x41" + hashlib.sha3_256(tpub[1:]).digest()[-20:]
+        ).decode()
+    except Exception:
+        pass
+    return out
+
+# ── Extra (non-EVM) chain address derivation ──
+# XRP/Cosmos/Polkadot/Sui/Aptos derive from the secp256k1 key (standard schemes).
+# NEAR/Cardano are ed25519-native and cannot be derived from a secp256k1 key in a
+# standard way; those use a documented best-effort ed25519 keypair seeded from the
+# same bytes (so a found key still gets a deterministic, checkable address).
+
+_XRP_ALPHABET = "rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz"
+_SS58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def _b58encode_custom(data: bytes, alphabet: str) -> str:
+    """Base58 encode with an arbitrary 58-char alphabet (handles leading zeros)."""
+    a = alphabet.encode("ascii")
+    if not data:
+        return ""
+    n = int.from_bytes(data, "big")
+    pad = 0
+    for b in data:
+        if b == 0:
+            pad += 1
+        else:
+            break
+    chars = []
+    if n > 0:
+        while n > 0:
+            n, rem = divmod(n, 58)
+            chars.append(a[rem])
+        chars.reverse()
+    return (bytes(a[0:1]) * pad + bytes(chars)).decode("ascii")
+
+
+def _bech32_convertbits(data, frombits, tobits, pad):
+    acc = 0
+    bits = 0
+    ret = []
+    maxv = (1 << tobits) - 1
+    for b in data:
+        acc = (acc << frombits) | b
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            ret.append((acc >> bits) & maxv)
+    if pad and bits:
+        ret.append((acc << (tobits - bits)) & maxv)
+    return ret
+
+
+def _bech32_polymod(values):
+    gen = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    chk = 1
+    for v in values:
+        b = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (b >> i) & 1 else 0
+    return chk
+
+
+def _bech32_encode(hrp: str, data_bytes: bytes) -> str:
+    data = _bech32_convertbits(data_bytes, 8, 5, True)
+    values = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data
+    polymod = _bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+    return hrp + "1" + "".join(_BECH32_CHARSET[d] for d in data + checksum)
+
+
+def _xrp_address(pub: bytes) -> str:
+    account_id = hashlib.new("ripemd160", hashlib.sha256(pub).digest()).digest()
+    payload = b"\x00" + account_id
+    checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    return _b58encode_custom(payload + checksum, _XRP_ALPHABET)
+
+
+def _cosmos_address(pub: bytes) -> str:
+    h = hashlib.new("ripemd160", hashlib.sha256(pub).digest()).digest()
+    return _bech32_encode("cosmos", h)
+
+
+def _polkadot_address(pub33: bytes) -> str:
+    body = b"\x00" + pub33  # Polkadot mainnet prefix + secp256k1 compressed pubkey
+    checksum = hashlib.blake2b(body, digest_size=64).digest()[:6]
+    return _b58encode_custom(body + checksum, _SS58_ALPHABET)
+
+
+def _sui_address(pub33: bytes) -> str:
+    h = hashlib.blake2b(b"\x01" + pub33, digest_size=32).digest()
+    return "0x" + h.hex()
+
+
+def _aptos_address(pub65: bytes) -> str:
+    h = hashlib.sha3_256(b"\x01" + pub65).digest()
+    return "0x" + h.hex()
+
+
+def _near_address(priv_bytes: bytes) -> str:
+    from nacl.signing import SigningKey
+    pub = SigningKey(priv_bytes[:32]).verify_key.encode()
+    return base58.b58encode(pub).decode()
+
+
+def _cardano_address(priv_bytes: bytes) -> str:
+    from nacl.signing import SigningKey
+    pub = SigningKey(priv_bytes[:32]).verify_key.encode()
+    cred = b"\xe1" + hashlib.blake2b(pub, digest_size=28).digest()
+    return _bech32_encode("addr", b"\x61" + cred)
+
+
+def _derive_extra_addresses(priv_bytes):
+    """Derive addresses for XRP/Cosmos/Polkadot/Sui/Aptos/NEAR/Cardano.
+
+    Labels match COINGECKO_IDS and the scan-loop wiring. Returns only the
+    addresses that derived successfully.
+    """
+    out = {}
+    if not _validate_private_key(priv_bytes):
+        return out
+    secp_compressed = None
+    secp_uncompressed = None
+    try:
+        from bitcoinlib.keys import Key
+        k = Key(import_key=priv_bytes.hex()[:64])
+        secp_compressed = bytes.fromhex(k.public_hex)
+        secp_uncompressed = bytes.fromhex(k.public_uncompressed_hex)
+    except Exception:
+        pass
+    if secp_compressed:
+        for label, fn, arg in (
+            ("XRP", _xrp_address, secp_compressed),
+            ("Cosmos", _cosmos_address, secp_compressed),
+            ("Polkadot", _polkadot_address, secp_compressed),
+            ("Sui", _sui_address, secp_compressed),
+        ):
+            try:
+                out[label] = fn(arg)
+            except Exception:
+                pass
+        try:
+            out["Aptos"] = _aptos_address(secp_uncompressed)
+        except Exception:
+            pass
+    # NEAR + Cardano: ed25519 best-effort (chains are ed25519-native)
+    try:
+        out["Near"] = _near_address(priv_bytes)
+        out["Cardano"] = _cardano_address(priv_bytes)
+    except Exception:
+        pass
+    return out
+
 def derive_all_addresses(key_type: str, key_data):
     addresses = {}
     if key_type == "BIP39":
@@ -678,6 +864,12 @@ def derive_all_addresses(key_type: str, key_data):
                 except Exception:
                     sol_bytes = hashlib.sha256(seed).digest()[:32]
                     addresses["SOL"] = private_key_to_sol_address(sol_bytes)
+            try:
+                btc_priv = Bip44.FromSeed(seed, Bip44Coins.BITCOIN).DeriveDefaultPath().PrivateKey().Raw().ToBytes()
+                addresses.update(_derive_fork_addresses(btc_priv))
+                addresses.update(_derive_extra_addresses(btc_priv))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -707,6 +899,8 @@ def derive_all_addresses(key_type: str, key_data):
             addresses["BTC-legacy"] = addresses["BTC-segwit"] = addresses["BTC-native"] = "?"
 
         addresses["SOL"] = private_key_to_sol_address(priv_bytes)
+        addresses.update(_derive_fork_addresses(priv_bytes))
+        addresses.update(_derive_extra_addresses(priv_bytes))
 
     elif key_type == "ETH-KEYSTORE":
         try:
@@ -1167,6 +1361,27 @@ class ScannerEngine:
                     if sol_addr and sol_addr != "?":
                         tasks.append(("Solana", sol_addr,
                             lambda a=sol_addr: check_sol_balance(a)))
+
+                    # ── Non-EVM forks + TRON (addresses derived per key) ──
+                    for fork_label, fork_checker in (
+                        ("Litecoin", check_ltc_balance),
+                        ("Dogecoin", check_doge_balance),
+                        ("Bitcoin Cash", check_bch_balance),
+                        ("Dash", check_dash_balance),
+                        ("Zcash", check_zec_balance),
+                        ("TRON", check_tron_balance),
+                        ("XRP", check_xrp_balance),
+                        ("Cardano", check_cardano_balance),
+                        ("Cosmos", check_cosmos_balance),
+                        ("Polkadot", check_polkadot_balance),
+                        ("Near", check_near_balance),
+                        ("Sui", check_sui_balance),
+                        ("Aptos", check_aptos_balance),
+                    ):
+                        fork_addr = addresses.get(fork_label, "?")
+                        if fork_addr and fork_addr != "?":
+                            tasks.append((fork_label, fork_addr,
+                                lambda a=fork_addr, fn=fork_checker: fn(a)))
 
                     # ── Fire ALL RPC calls in parallel (12 workers) ──
                     collected = []  # (chain, address, balance)

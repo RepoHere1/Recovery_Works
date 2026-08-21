@@ -57,11 +57,28 @@ The file is organized top-to-bottom as one module (no subpackages):
    BIP38, base64, and "named" keys. `scan_file_for_keys` runs them all and returns a
    list of `(key_type, key_data)`.
 5. **Address derivation** (`derive_all_addresses`): given a key type + data, returns a
-   dict of `{ETH, BTC-legacy, BTC-segwit, BTC-native, SOL}` addresses.
+   dict of `{ETH, BTC-legacy, BTC-segwit, BTC-native, SOL, Litecoin, Dogecoin,
+   Bitcoin Cash, Dash, Zcash, TRON, XRP, Cardano, Cosmos, Polkadot, Near, Sui,
+   Aptos}` addresses. `derive_all_addresses` calls `_derive_fork_addresses`
+   (BTC-family + TRON from the compressed secp256k1 pubkey: p2pkh with per-chain
+   version byte / keccak for TRON) and `_derive_extra_addresses` (the remaining
+   non-EVM chains; see below).
 6. **Balance checkers** (`check_evm_balance`, `check_btc_balance`, `check_sol_balance`,
-   plus one per non-EVM chain, and `_check_utxo_balance` helper): each takes an address
-   and returns a `Decimal`. They iterate fallback URLs and return `Decimal("0")` on any
-   failure.
+   `check_tron_balance`, `check_ltc/doge/bch/dash/zec_balance`, `check_xrp/cardano/
+   cosmos/polkadot/near/sui/aptos_balance`, and `_check_utxo_balance` helper): each takes
+   an address and returns a `Decimal`. They iterate fallback URLs and return
+   `Decimal("0")` on any failure. **Wired into the scan loop (all parallel via the 12-worker
+   pool):** all 20 EVM chains (via `RPC_ENDPOINTS`), BTC (3 types), SOL, and every
+   non-EVM chain — Litecoin, Dogecoin, Bitcoin Cash, Dash, Zcash, TRON, XRP, Cardano,
+   Cosmos, Polkadot, Near, Sui, Aptos. Address derivation per chain:
+   - XRP/Cosmos/Polkadot/Sui/Aptos: standard schemes from the secp256k1 key
+     (XRP = ripemd160+sha256 → XRP base58; Cosmos = ripemd160+sha256 → bech32 `cosmos`;
+     Polkadot = SS58 of the compressed secp256k1 pubkey; Sui = `0x`+blake2b(0x01‖pub);
+     Aptos = `0x`+sha3(0x01‖pub)).
+   - NEAR/Cardano: ed25519-native, NOT derivable from a secp256k1 key in a standard way.
+     They use a **best-effort** ed25519 keypair seeded from the same private-key bytes,
+     so the address is deterministic but may not match the user's actual NEAR/Cardano
+     account. Treat their balances as best-effort, not authoritative.
 7. **`ScannerEngine`** (class): the scan loop. `scan_folder(folder)` walks the tree,
    calls detectors + derivation + balance checkers, fires all RPC calls with a
    `ThreadPoolExecutor(max_workers=12)`, writes JSONL + vault, and pushes results to the
