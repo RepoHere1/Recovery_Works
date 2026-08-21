@@ -27,7 +27,6 @@ getcontext().prec = 50  # maximum precision, no truncation ever
 
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from web3 import Web3
 from bip_utils import (
     Bip39SeedGenerator, Bip39MnemonicValidator, Bip39MnemonicGenerator,
     Bip44, Bip44Coins, Bip49, Bip49Coins, Bip84, Bip84Coins,
@@ -1288,6 +1287,7 @@ class App(ttk.Frame):
         self.scan_thread = None
         self.active_folder = None
         self._last_balance_meta = ("?", "?")
+        self._total_usd_dec = Decimal("0")
         self.initialized = False
 
         self._build_ui()
@@ -1743,6 +1743,7 @@ class App(ttk.Frame):
         for key, w in self.stats_widgets.items():
             if key == "total_usd":
                 w.config(text="$0.00")
+                self._total_usd_dec = Decimal("0")
             elif key == "vaulted":
                 # NEVER reset — count from permanent file
                 existing = jsonl_read_all(VAULT_JSONL)
@@ -1869,21 +1870,14 @@ class App(ttk.Frame):
                 curr = 0
             self.stats_widgets["funded"].config(text=str(curr + 1))
 
-            # ── Accumulate running USD total (pure Decimal, no truncation) ──
-            old_raw = self.stats_widgets["total_usd"]["text"]
-            try:
-                raw = old_raw.replace("$","").replace(",","")
-                running = Decimal(raw) if raw else Decimal("0")
-            except Exception:
-                running = Decimal("0")
-            running += usd_val
-            new_text = f"${running:.8f}".rstrip("0").rstrip(".")
-            if new_text.endswith("."):
-                new_text += "00"
+            # ── Accumulate running USD total (full precision Decimal) ──
+            prev_total = self._total_usd_dec
+            self._total_usd_dec += usd_val
+            new_text = self._fmt_usd(self._total_usd_dec)
             self.stats_widgets["total_usd"].config(text=new_text)
             # Log tally update
             self.log("balance_pos",
-                f"   \u25b3 TALLY: {old_raw} + ${usd_val} = {new_text}  [price: ${usd_price_dec}]")
+                f"   \u25b3 TALLY: {self._fmt_usd(prev_total)} + ${usd_val} = {new_text}  [price: ${usd_price_dec}]")
 
             self.log("balance_pos", log_line)
         else:
@@ -1910,6 +1904,21 @@ class App(ttk.Frame):
         total_usd = self.stats_widgets["total_usd"]["text"]
         self.lbl_footer.config(
             text=f"\u2699  {kc} keys  |  {fc} funded  |  {total_usd} total  |  checking {chain}...")
+
+    @staticmethod
+    def _fmt_usd(dec):
+        """Format a Decimal USD total for the stat label without losing precision.
+
+        Uses 12 decimals so small per-chain balances (e.g. zkSync dust in the
+        ~$1e-8 range) stay visible in the running tally instead of being
+        rounded away.
+        """
+        s = f"${dec:.12f}".rstrip("0").rstrip(".")
+        if s in ("$", "$."):
+            return "$0.00"
+        if "." not in s:
+            s += ".00"
+        return s
 
     def log(self, tag: str, message: str, extra: str = ""):
         self.txt_log.config(state=tk.NORMAL)
@@ -2073,6 +2082,11 @@ class App(ttk.Frame):
         from_addr = wallet[1]
 
         # Get RPC
+        try:
+            from web3 import Web3
+        except ImportError:
+            messagebox.showerror("Send", "web3 is not installed. Run: pip install web3")
+            return
         rpc_list = RPC_ENDPOINTS.get(chain, ["https://cloudflare-eth.com"])
         w3 = Web3(Web3.HTTPProvider(rpc_list[0]))
 
