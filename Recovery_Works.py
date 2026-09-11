@@ -18,7 +18,7 @@ import time
 import hashlib
 import struct
 import base64
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from collections import OrderedDict
 from typing import Optional
@@ -1317,7 +1317,7 @@ class ScannerEngine:
                         "file": rel_path,
                         "file_abs": filepath,
                         "key_type": key_type,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                     if key_type == "BIP39":
                         record["bip39_phrase"] = key_data
@@ -1445,7 +1445,7 @@ class ScannerEngine:
                             "type": "VAULT",
                             "file": rel_path,
                             "key_type": key_type,
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         }
                         # Store the full secret
                         if key_type == "BIP39":
