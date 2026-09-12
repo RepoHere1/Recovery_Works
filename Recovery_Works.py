@@ -87,6 +87,20 @@ _ANKR_KEY = "686c37d4360af4d79afda6313ea426fef99f5c4320b380589ccb2c93d830112e"
 SCANNED_JSONL = "scanned_records.jsonl"
 BALANCE_JSONL = "balance_records.jsonl"
 VAULT_JSONL   = "permanent_vault.jsonl"   # NEVER cleared — permanent memory
+SCANNED_FILES_JSONL = "scanned_files.jsonl"  # dedup: files already scanned
+
+# ── Dedup state ──
+_seen_files: set = set()
+_seen_keys: set = set()
+
+def _mark_scanned(filepath: str, key_type: str, key_data):
+    """Mark file+key as seen to prevent duplicates within a session."""
+    kd = key_data.hex() if isinstance(key_data, bytes) else str(key_data)
+    af = os.path.abspath(filepath)
+    _seen_keys.add((af, key_type, kd))
+    if af not in _seen_files:
+        _seen_files.add(af)
+        jsonl_append(SCANNED_FILES_JSONL, {"file": af})
 
 # ── EVM Chains (each has [primary_rpc, fallback_rpc, ...]) ──
 RPC_ENDPOINTS = OrderedDict([
@@ -1356,6 +1370,9 @@ class ScannerEngine:
         for idx, filepath in enumerate(all_files):
             if not self.running:
                 break
+            # Dedup: skip files already scanned in this session
+            if os.path.abspath(filepath) in _seen_files:
+                continue
             self.scanned_count += 1
 
             throttle = self.throttle_ms / 1000.0
@@ -1372,8 +1389,12 @@ class ScannerEngine:
 
             keys = scan_file_for_keys(filepath)
             if keys:
-                self.found_keys += len(keys)
-                for key_type, key_data in keys:
+                unique_keys = [(kt, kd) for kt, kd in keys if (os.path.abspath(filepath), kt, kd.hex() if isinstance(kd, bytes) else str(kd)) not in _seen_keys]
+                if not unique_keys:
+                    continue
+                self.found_keys += len(unique_keys)
+                for key_type, key_data in unique_keys:
+                    _mark_scanned(filepath, key_type, key_data)
                     rel_path = os.path.relpath(filepath, folder_path)
                     record = {
                         "type": "KEY_FOUND",
@@ -2035,6 +2056,10 @@ class App(ttk.Frame):
     def on_start_scan(self):
         if not self.active_folder and not self.active_file:
             return
+
+        # Reset dedup for this scan session
+        _seen_keys.clear()
+        _seen_files.clear()
 
         self.btn_scan.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
