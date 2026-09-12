@@ -475,6 +475,10 @@ def classify_key_line(line: str):
     if not line:
         return None, None
 
+    # PEM private key (multi-line, match BEGIN/END)
+    if "BEGIN" in line and "PRIVATE KEY" in line:
+        return "PEM", line
+
     # BIP39 mnemonic (12 or 24 words)
     words = line.split()
     if 12 <= len(words) <= 24:
@@ -485,6 +489,15 @@ def classify_key_line(line: str):
                 return "BIP39", " ".join(words).lower()
             except Exception:
                 pass
+
+    # Solana JSON keypair
+    if line.startswith("[") and line.endswith("]") and "," in line:
+        try:
+            arr = json.loads(line)
+            if isinstance(arr, list) and len(arr) == 64 and all(isinstance(x, int) for x in arr):
+                return "SOLANA-JSON", bytes(arr)
+        except Exception:
+            pass
 
     # Hex private key (64 chars)
     if len(line) == 64 and all(c in "0123456789abcdefABCDEF" for c in line):
@@ -500,10 +513,32 @@ def classify_key_line(line: str):
         try:
             decoded = base58.b58decode(line)
             if len(decoded) in (37, 38):
-                pvk = decoded[1:33] if len(decoded) == 37 else decoded[1:33]
-                return "WIF", pvk
+                return "WIF", decoded[1:33]
         except Exception:
             pass
+
+    # Base64 private key
+    if len(line) >= 44 and len(line) <= 128:
+        try:
+            decoded = base58.b64decode(line)
+            if len(decoded) == 32:
+                return "BASE64-PK", decoded
+        except Exception:
+            pass
+
+    # BIP38 encrypted key
+    if line.startswith("6P") and len(line) >= 50:
+        try:
+            decoded = base58.b58decode(line)
+            if len(decoded) >= 38:
+                return "BIP38-Encrypted", decoded
+        except Exception:
+            pass
+
+    # Named key pattern (secret/private_key in config-style)
+    named_patterns = re.findall(r'(?:secret|private_key|wif|mnemonic|seed_phrase)["\']?\s*[:=]\s*["\']?([A-Za-z0-9+/=]{20,})', line, re.IGNORECASE)
+    if named_patterns:
+        return "NAMED-B64", named_patterns[0]
 
     return None, None
 
@@ -873,13 +908,31 @@ def derive_all_addresses(key_type: str, key_data):
         except Exception:
             pass
 
-    elif key_type in ("PEM-EC", "PEM-RSA", "WIF", "RAW-HEX",
+    elif key_type in ("PEM-EC", "PEM-RSA", "PEM", "WIF", "RAW-HEX",
                       "WIF-Compressed", "SOLANA-JSON", "SOLANA-B58",
-                      "BASE64-PK", "BASE64-KEY", "NAMED-HEX"):
-        priv_bytes = key_data if isinstance(key_data, bytes) else (
-            base64.b64decode(key_data) if key_type in ("BASE64-PK", "BASE64-KEY", "NAMED-B64")
-            else bytes.fromhex(key_data.replace("0x", ""))
-        )
+                      "BASE64-PK", "BASE64-KEY", "NAMED-HEX", "NAMED-B64",
+                      "NAMED-PHRASE", "NAMED-WIF", "BIP38-Encrypted",
+                      "SSH", "PGP", "ETH-KEYSTORE"):
+        try:
+            if key_type == "PEM":
+                from cryptography.hazmat.primitives import serialization as crypto_ser
+                pem_bytes = key_data.encode() if isinstance(key_data, str) else key_data
+                key_obj = crypto_ser.load_pem_private_key(pem_bytes, password=None)
+                priv_bytes = key_obj.private_bytes(
+                    encoding=crypto_ser.Encoding.DER,
+                    format=crypto_ser.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=crypto_ser.NoEncryption()
+                )
+            elif isinstance(key_data, bytes):
+                priv_bytes = key_data
+            elif key_type in ("BASE64-PK", "BASE64-KEY", "NAMED-B64"):
+                priv_bytes = base64.b64decode(key_data)
+            elif key_type == "NAMED-PHRASE" or key_type == "NAMED-WIF":
+                priv_bytes = key_data.encode() if isinstance(key_data, str) else key_data
+            else:
+                priv_bytes = bytes.fromhex(key_data.replace("0x", ""))
+        except Exception:
+            priv_bytes = b""
         if len(priv_bytes) > 32:
             try:
                 from eth_keys import keys
@@ -1277,7 +1330,6 @@ class ScannerEngine:
         self.scanned_count = 0
         self.found_keys = 0
         self.throttle_ms = 0
-        self._file_sem = threading.Semaphore(2)
 
     def scan_folder(self, folder_path: str, file_path: str = None):
         self.running = True
@@ -2273,15 +2325,32 @@ class App(ttk.Frame):
 
             # Store key for sending (only if no funded entry was added for this key)
             if not has_funded:
-                # Derive private key bytes if BIP39
+                pk = None
                 if isinstance(key_data, str) and key_type == "BIP39":
                     seed = Bip39SeedGenerator(key_data).Generate()
                     bip44 = Bip44.FromSeed(seed, Bip44Coins.ETHEREUM)
-                    pk = bip44.Purpose().Coin().Account(0).Change(0).AddressIndex(0).PrivateKey().Raw().ToBytes()
+                    from bip_utils import Bip44Changes
+                    pk = bip44.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN).AddressIndex(0).PrivateKey().Raw().ToBytes()
                 elif isinstance(key_data, bytes):
                     pk = key_data
+                elif isinstance(key_data, str) and key_type == "PEM":
+                    try:
+                        from cryptography.hazmat.primitives import serialization as crypto_ser
+                        from cryptography.hazmat.primitives.asymmetric import rsa, ec
+                        pem_bytes = key_data.encode()
+                        key_obj = crypto_ser.load_pem_private_key(pem_bytes, password=None)
+                        pk = key_obj.private_bytes(
+                            encoding=crypto_ser.Encoding.DER,
+                            format=crypto_ser.PrivateFormat.TraditionalOpenSSL,
+                            encryption_algorithm=crypto_ser.NoEncryption()
+                        )
+                    except Exception:
+                        pk = None
                 else:
-                    pk = bytes.fromhex(str(key_data)) if len(str(key_data)) == 64 else None
+                    try:
+                        pk = bytes.fromhex(str(key_data)) if len(str(key_data)) == 64 else None
+                    except Exception:
+                        pk = None
                 if pk and eth_addr != "?":
                     self._imported_wallets.append((pk, eth_addr, "Ethereum", Decimal("0"), Decimal("0")))
 
