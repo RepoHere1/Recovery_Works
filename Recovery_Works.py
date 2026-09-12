@@ -239,7 +239,7 @@ _jsonl_lock = threading.Lock()
 def jsonl_append(filepath: str, record: dict):
     with _jsonl_lock:
         try:
-            record["_ts"] = datetime.utcnow().isoformat()
+            record["_ts"] = datetime.now(UTC).isoformat()
             with open(filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, default=str) + "\n")
         except Exception:
@@ -1279,17 +1279,28 @@ class ScannerEngine:
         self.throttle_ms = 0
         self._file_sem = threading.Semaphore(2)
 
-    def scan_folder(self, folder_path: str):
+    def scan_folder(self, folder_path: str, file_path: str = None):
         self.running = True
         self.scanned_count = 0
         self.found_keys = 0
         all_files = []
-        for root, dirs, files in os.walk(folder_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and not d.startswith("_")]
-            for f in files:
-                all_files.append(os.path.join(root, f))
+        if file_path:
+            if os.path.isfile(file_path):
+                all_files = [file_path]
+            else:
+                all_files = []
+        else:
+            for root, dirs, files in os.walk(folder_path):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and not d.startswith("_")]
+                for f in files:
+                    all_files.append(os.path.join(root, f))
 
         total = len(all_files)
+        if total == 0:
+            if self.status_cb:
+                self.status_cb("No files found to scan")
+            self.running = False
+            return
         for idx, filepath in enumerate(all_files):
             if not self.running:
                 break
@@ -1411,7 +1422,7 @@ class ScannerEngine:
                             "address": addr,
                             "balance": str(bal),
                             "usd": str(usd),
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         }
                         jsonl_append(BALANCE_JSONL, bal_record)
                         if self.key_cb:
@@ -1501,8 +1512,10 @@ class App(ttk.Frame):
         )
         self.scan_thread = None
         self.active_folder = None
+        self.active_file = None
         self._last_balance_meta = ("?", "?")
         self._total_usd_dec = Decimal("0")
+        self._last_pct = -1
         self.initialized = False
 
         self._build_ui()
@@ -1600,6 +1613,13 @@ class App(ttk.Frame):
                  command=self.on_open_folder)
         self.btn_open.pack(side=tk.LEFT)
 
+        self.btn_open_file = tk.Button(inner_c, text="\U0001f4c2  Open File",
+                 font=("Segoe UI", 9, "bold"), bg="#1565c0", fg="#ffffff",
+                 activebackground="#42a5f5", activeforeground="#ffffff",
+                 relief=tk.FLAT, padx=14, pady=4, cursor="hand2",
+                 command=self.on_open_file)
+        self.btn_open_file.pack(side=tk.LEFT, padx=(6,0))
+
         self.btn_scan = tk.Button(inner_c, text="\u25b6  Scan",
                  font=("Segoe UI", 9, "bold"), bg="#388e3c", fg="#ffffff",
                  activebackground="#4caf50", activeforeground="#ffffff",
@@ -1640,6 +1660,10 @@ class App(ttk.Frame):
         self.lbl_folder = tk.Label(inner_c, text="No folder selected",
                  font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed")
         self.lbl_folder.pack(side=tk.LEFT, padx=(15,0))
+
+        self.lbl_file = tk.Label(inner_c, text="",
+                 font=("Segoe UI", 9), fg="#1565c0", bg="#eaf5ed")
+        self.lbl_file.pack(side=tk.LEFT, padx=(0,10))
 
         self.lbl_progress = tk.Label(inner_c, text="",
                  font=("Segoe UI", 9), fg="#1b5e20", bg="#eaf5ed")
@@ -1932,9 +1956,22 @@ class App(ttk.Frame):
         folder = filedialog.askdirectory(title="Select folder to scan for private keys")
         if folder:
             self.active_folder = folder
+            self.active_file = None
             self.lbl_folder.config(text=f"\U0001f4c2  {folder}")
+            self.lbl_file.config(text="")
             self.btn_scan.config(state=tk.NORMAL)
             self.log("info", f"Selected folder: {folder}")
+            self.log("info", "Click \u25b6 Scan to begin key extraction and balance checking")
+
+    def on_open_file(self):
+        filepath = filedialog.askopenfilename(title="Select a file to scan for private keys")
+        if filepath:
+            self.active_file = filepath
+            self.active_folder = None
+            self.lbl_folder.config(text="\U0001f4c2  (single file mode)")
+            self.lbl_file.config(text=f"\U0001f4c2  {filepath}")
+            self.btn_scan.config(state=tk.NORMAL)
+            self.log("info", f"Selected file: {filepath}")
             self.log("info", "Click \u25b6 Scan to begin key extraction and balance checking")
 
     def _on_speed_change(self, val):
@@ -1944,12 +1981,13 @@ class App(ttk.Frame):
         self.lbl_status_top.config(text=f"\u25cf  {'Gentle' if delay >= 0.2 else 'Balanced' if delay >= 0.05 else 'Fast' if delay > 0 else 'Turbo'}")
 
     def on_start_scan(self):
-        if not self.active_folder:
+        if not self.active_folder and not self.active_file:
             return
 
         self.btn_scan.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.btn_open.config(state=tk.DISABLED)
+        self.btn_open_file.config(state=tk.DISABLED)
         self.progress["value"] = 0
         self.lbl_status_top.config(text="\u25cf  Scanning...", fg="#1b5e20", bg="#eaf5ed")
         self.txt_log.config(state=tk.NORMAL)
@@ -1981,7 +2019,7 @@ class App(ttk.Frame):
 
         self.scan_thread = threading.Thread(
             target=self.engine.scan_folder,
-            args=(self.active_folder,),
+            args=(self.active_folder, self.active_file),
             daemon=True
         )
         self.scan_thread.start()
@@ -2008,10 +2046,13 @@ class App(ttk.Frame):
             self.btn_scan.config(state=tk.NORMAL)
             self.btn_stop.config(state=tk.DISABLED)
             self.btn_open.config(state=tk.NORMAL)
+            self.btn_open_file.config(state=tk.NORMAL)
 
     def on_progress(self, current: int, total: int):
         pct = int((current / max(total, 1)) * 100)
-        self.root.after(0, self._update_progress, current, total, pct)
+        if pct != self._last_pct:
+            self._last_pct = pct
+            self.root.after(0, self._update_progress, current, total, pct)
 
     def _update_progress(self, current: int, total: int, pct: int):
         self.progress["value"] = pct
