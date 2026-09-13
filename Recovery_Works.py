@@ -92,15 +92,60 @@ SCANNED_FILES_JSONL = "scanned_files.jsonl"  # dedup: files already scanned
 # ── Dedup state ──
 _seen_files: set = set()
 _seen_keys: set = set()
+_file_hashes: dict = {}  # filepath -> sha256 hash of content
+
+
+def _load_scanned_files():
+    """Load previously-scanned files from JSONL into _seen_files for cross-session dedup."""
+    records = jsonl_read_all(SCANNED_FILES_JSONL)
+    for rec in records:
+        fp = rec.get("file")
+        if fp:
+            _seen_files.add(fp)
+            if rec.get("sha256"):
+                _file_hashes[fp] = rec["sha256"]
+
+
+def _file_sha256(filepath: str) -> str:
+    """Compute SHA-256 hash of file contents."""
+    try:
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
 
 def _mark_scanned(filepath: str, key_type: str, key_data):
-    """Mark file+key as seen to prevent duplicates within a session."""
+    """Mark file+key as seen to prevent duplicates within a session.
+    Also persists to scanned_files.jsonl for cross-session dedup and tracks content hash."""
     kd = key_data.hex() if isinstance(key_data, bytes) else str(key_data)
     af = os.path.abspath(filepath)
     _seen_keys.add((af, key_type, kd))
     if af not in _seen_files:
         _seen_files.add(af)
-        jsonl_append(SCANNED_FILES_JSONL, {"file": af})
+        file_hash = _file_sha256(filepath)
+        rec = {"file": af}
+        if file_hash:
+            rec["sha256"] = file_hash
+        jsonl_append(SCANNED_FILES_JSONL, rec)
+        if file_hash:
+            _file_hashes[af] = file_hash
+
+
+def _file_needs_scan(filepath: str) -> bool:
+    """Check if a file has changed since last scan (by content hash).
+    Returns True if the file should be scanned (new or modified)."""
+    af = os.path.abspath(filepath)
+    current_hash = _file_sha256(filepath)
+    if not current_hash:
+        return True  # can't hash, assume needs scan
+    if _file_hashes.get(af) == current_hash:
+        return False  # unchanged, skip
+    _file_hashes[af] = current_hash
+    return True
 
 # ── EVM Chains (each has [primary_rpc, fallback_rpc, ...]) ──
 RPC_ENDPOINTS = OrderedDict([
@@ -230,8 +275,22 @@ ZEC_RPCS  = ["https://zcash.nownodes.io"]
 
 BTC_API = "https://blockchain.info/balance?active="
 
+# Load previously-scanned files for cross-session dedup
+_load_scanned_files()
+
 MNEMONIC_CHECK = Mnemonic("english")
 BIP39_WORDS_SET = set(Mnemonic("english").wordlist)
+
+def _read_file_text(filepath: str) -> Optional[str]:
+    """Read a file with multi-encoding fallback: utf-8, cp1252, latin-1, utf-16."""
+    encodings = ["utf-8", "cp1252", "latin-1", "utf-16"]
+    for enc in encodings:
+        try:
+            with open(filepath, "r", encoding=enc, errors="replace") as f:
+                return f.read()
+        except Exception:
+            continue
+    return None
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 TEXT_EXTENSIONS = {
@@ -249,6 +308,15 @@ BINARY_EXTENSIONS = {".pyc", ".exe", ".dll", ".so", ".dylib", ".zip", ".gz",
 # ═══════════════════════════════════════════════════════════════
 
 _jsonl_lock = threading.Lock()
+
+# ── Module-level requests Session with connection pooling ──
+_session = requests.Session()
+_session.headers.update({"User-Agent": "RecoveryWorks/1.0"})
+
+
+def _get_session():
+    """Return the module-level requests Session for connection pooling."""
+    return _session
 
 def jsonl_append(filepath: str, record: dict):
     with _jsonl_lock:
@@ -567,15 +635,9 @@ def scan_file_for_keys(filepath: str):
         return []
 
     results = []
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except Exception:
-        try:
-            with open(filepath, "r", encoding="latin-1") as f:
-                text = f.read()
-        except Exception:
-            return []
+    text = _read_file_text(filepath)
+    if text is None:
+        return []
 
     bip39 = detect_bip39_in_text(text)
     if bip39:
@@ -1012,32 +1074,44 @@ def derive_all_addresses(key_type: str, key_data):
 # BALANCE CHECKERS - LIVE RPC, NO MOCKS, NO FAKES, NO TRUNCATION
 # ═══════════════════════════════════════════════════════════════
 
-def _rpc_post(urls, payload, timeout=8):
-    """Try multiple RPC URLs in order; return response or None."""
-    if isinstance(urls, str):
-        urls = [urls]
-    for url in urls:
+def _request_with_retry(session, method, url, **kwargs):
+    """Execute an HTTP request with up to 3 retries and exponential backoff."""
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            resp = requests.post(url, json=payload, timeout=timeout,
-                                 headers={"Content-Type": "application/json"})
+            resp = session.request(method, url, **kwargs)
             if resp.status_code == 200:
                 return resp
         except Exception:
-            continue
+            pass
+        if attempt < max_retries - 1:
+            time.sleep(0.5 * (2 ** attempt))
     return None
 
-def _rpc_get(urls, timeout=8):
-    """GET request with fallback URLs."""
+
+def _rpc_post(urls, payload, timeout=8):
+    """Try multiple RPC URLs in order with retries; return response or None."""
     if isinstance(urls, str):
         urls = [urls]
     for url in urls:
-        try:
-            resp = requests.get(url, timeout=timeout)
-            if resp.status_code == 200:
-                return resp
-        except Exception:
-            continue
+        resp = _request_with_retry(_session, "POST", url, json=payload,
+                                    timeout=timeout,
+                                    headers={"Content-Type": "application/json"})
+        if resp is not None:
+            return resp
     return None
+
+
+def _rpc_get(urls, timeout=8):
+    """GET request with fallback URLs and retries."""
+    if isinstance(urls, str):
+        urls = [urls]
+    for url in urls:
+        resp = _request_with_retry(_session, "GET", url, timeout=timeout)
+        if resp is not None:
+            return resp
+    return None
+
 
 def check_evm_balance(rpc_urls, address, chain=""):
     """Check native EVM balance with multiple RPC fallbacks. Returns Decimal (full precision)."""
@@ -1061,7 +1135,7 @@ def check_btc_balance(address):
     if not address or address == "?":
         return Decimal("0")
     try:
-        resp = requests.get(f"{BTC_API}{address}", timeout=8)
+        resp = _rpc_get([BTC_API + address], timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             if address in data:
@@ -1097,7 +1171,7 @@ def check_tron_balance(address):
         return Decimal("0")
     for rpc in TRON_RPCS:
         try:
-            resp = requests.get(f"{rpc}/v1/accounts/{address}", timeout=8)
+            resp = _rpc_get([rpc], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 if "data" in data and len(data["data"]) > 0:
@@ -1115,7 +1189,7 @@ def check_xrp_balance(address):
         try:
             payload = {"method": "account_info",
                        "params": [{"account": address, "strict": True, "ledger_index": "current"}]}
-            resp = requests.post(rpc, json=payload, timeout=8)
+            resp = _rpc_post([rpc], json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 bal = data.get("result", {}).get("account_data", {}).get("Balance", "0")
@@ -1130,7 +1204,7 @@ def check_cardano_balance(address):
         return Decimal("0")
     for rpc in CARDANO_RPCS:
         try:
-            resp = requests.get(f"{rpc}/addresses/{address}", timeout=8)
+            resp = _rpc_get([rpc], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 lovelace = 0
@@ -1148,8 +1222,7 @@ def check_cosmos_balance(address):
         return Decimal("0")
     for rpc in COSMOS_RPCS:
         try:
-            resp = requests.get(
-                f"{rpc}/cosmos/bank/v1beta1/balances/{address}", timeout=8)
+            resp = _rpc_get([f"{rpc}/cosmos/bank/v1beta1/balances/{address}"], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 for b in data.get("balances", []):
@@ -1166,7 +1239,7 @@ def check_polkadot_balance(address):
         return Decimal("0")
     for rpc in POLKADOT_RPCS:
         try:
-            resp = requests.get(f"{rpc}/accounts/{address}/balance-info", timeout=8)
+            resp = _rpc_get([rpc], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 free = str(data.get("free", "0"))
@@ -1184,7 +1257,7 @@ def check_near_balance(address):
             payload = {"jsonrpc": "2.0", "id": 1, "method": "query",
                        "params": {"request_type": "view_account",
                                   "finality": "final", "account_id": address}}
-            resp = requests.post(rpc, json=payload, timeout=8)
+            resp = _rpc_post([rpc], json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 yocto = data.get("result", {}).get("amount", "0")
@@ -1200,7 +1273,7 @@ def check_sui_balance(address):
     for rpc in SUI_RPCS:
         try:
             payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [address]}
-            resp = requests.post(rpc, json=payload, timeout=8)
+            resp = _rpc_post([rpc], json=payload, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 mist = int(data.get("result", {}).get("totalBalance", "0"))
@@ -1215,9 +1288,7 @@ def check_aptos_balance(address):
         return Decimal("0")
     for rpc in APTOS_RPCS:
         try:
-            resp = requests.get(
-                f"{rpc}/v1/accounts/{address}/resource/0x1::coin::CoinStore%3C0x1::aptos_coin::AptosCoin%3E",
-                timeout=8)
+            resp = _rpc_get([rpc], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 octa = int(data.get("data", {}).get("coin", {}).get("value", "0"))
@@ -1232,7 +1303,7 @@ def _check_utxo_balance(address, api_urls, divisor):
         return Decimal("0")
     for url in api_urls:
         try:
-            resp = requests.get(f"{url}/address/{address}", timeout=8)
+            resp = _rpc_get([rpc], timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 funded = data.get("chain_stats", {}).get("funded_txo_sum", 0)
@@ -1312,10 +1383,9 @@ def fetch_usd_prices():
         batch = all_ids[i:i+50]
         ids = ",".join(batch)
         try:
-            resp = requests.get(
+            resp = _request_with_retry(_session, "GET",
                 f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
-                timeout=15
-            )
+                timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 with _usd_lock:
@@ -1383,6 +1453,11 @@ class ScannerEngine:
 
             if total > 100 and self.scanned_count % 50 == 0:
                 pass  # no delay — full speed
+
+            if not _file_needs_scan(filepath):
+                if self.status_cb:
+                    self.status_cb(f"Skipping (unchanged): {os.path.basename(filepath)}")
+                continue
 
             keys = scan_file_for_keys(filepath)
             if keys:
