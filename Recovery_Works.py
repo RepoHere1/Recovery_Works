@@ -1370,9 +1370,6 @@ class ScannerEngine:
         for idx, filepath in enumerate(all_files):
             if not self.running:
                 break
-            # Dedup: skip files already scanned in this session
-            if os.path.abspath(filepath) in _seen_files:
-                continue
             self.scanned_count += 1
 
             throttle = self.throttle_ms / 1000.0
@@ -1394,7 +1391,7 @@ class ScannerEngine:
                     continue
                 self.found_keys += len(unique_keys)
                 for key_type, key_data in unique_keys:
-                    _mark_scanned(filepath, key_type, key_data)
+                    _seen_keys.add((os.path.abspath(filepath), key_type, key_data.hex() if isinstance(key_data, bytes) else str(key_data)))
                     rel_path = os.path.relpath(filepath, folder_path)
                     record = {
                         "type": "KEY_FOUND",
@@ -2057,9 +2054,8 @@ class App(ttk.Frame):
         if not self.active_folder and not self.active_file:
             return
 
-        # Reset dedup for this scan session
+        # Reset dedup keys for this scan session
         _seen_keys.clear()
-        _seen_files.clear()
 
         self.btn_scan.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
