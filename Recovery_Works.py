@@ -1585,7 +1585,6 @@ class App(ttk.Frame):
         self.active_file = None
         self._last_balance_meta = ("?", "?")
         self._total_usd_dec = Decimal("0")
-        self._last_pct = -1
         self.initialized = False
 
         self._build_ui()
@@ -2123,9 +2122,7 @@ class App(ttk.Frame):
 
     def on_progress(self, current: int, total: int):
         pct = int((current / max(total, 1)) * 100)
-        if pct != self._last_pct:
-            self._last_pct = pct
-            self.root.after(0, self._update_progress, current, total, pct)
+        self.root.after(0, self._update_progress, current, total, pct)
 
     def _update_progress(self, current: int, total: int, pct: int):
         self.progress["value"] = pct
