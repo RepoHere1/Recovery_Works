@@ -1376,7 +1376,7 @@ class ScannerEngine:
             if throttle > 0:
                 time.sleep(throttle)
 
-            if self.progress_cb:
+            if self.progress_cb and (self.scanned_count % 10 == 0 or self.scanned_count == total):
                 self.progress_cb(self.scanned_count, total)
             if self.status_cb:
                 self.status_cb(f"Scanning ({self.scanned_count}/{total}): {os.path.basename(filepath)}")
@@ -1420,8 +1420,6 @@ class ScannerEngine:
 
                     if self.key_cb:
                         self.key_cb(rel_path, key_type, key_data, addresses)
-
-                    fetch_usd_prices()
 
                     # ── Build all chain check tasks ──
                     tasks = []  # (chain_label, address, checker_fn)
