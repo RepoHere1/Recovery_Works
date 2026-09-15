@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 Recovery Works - Private Key Scanner & Multi-Chain Balance Checker
-Scans folders for BIP39 mnemonics, PEM keys, WIF keys, raw hex keys,
-derives addresses for 30+ blockchains, checks balances via LIVE RPC
-APIs (no mocks, no fakes, no lies). FULL SECRET DISCLOSURE - every
-key/seed/mnemonic logged in FULL. NO TRUNCATION - complete precision.
+Scans folders for BIP39 mnemonics, PEM keys, WIF keys, raw hex keys, 
+derives addresses for 30+ blockchains, checks balances via LIVE RPC APIs 
+(no mocks, no fakes, no lies). 
+
+FULL SECRET DISCLOSURE - every key/seed/mnemonic logged in FULL. 
+NO TRUNCATION - complete precision.
 """
 
 import tkinter as tk
@@ -23,7 +25,10 @@ from pathlib import Path
 from collections import OrderedDict
 from typing import Optional
 from decimal import Decimal, getcontext
-getcontext().prec = 50  # maximum precision, no truncation ever
+
+# Set maximum precision, no truncation ever
+getcontext().prec = 50
+
 
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,6 +59,7 @@ def _load_dotenv(env_path: str = None):
     if not os.path.exists(env_path):
         return {}
     env_vars = {}
+
     try:
         with open(env_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -95,16 +101,41 @@ _seen_keys: set = set()
 _file_hashes: dict = {}  # filepath -> sha256 hash of content
 
 
-def _load_scanned_files():
-    """Load previously-scanned files from JSONL into _seen_files for cross-session dedup."""
-    records = jsonl_read_all(SCANNED_FILES_JSONL)
-    for rec in records:
-        fp = rec.get("file")
-        if fp:
-            _seen_files.add(fp)
-            if rec.get("sha256"):
-                _file_hashes[fp] = rec["sha256"]
+import json
+import os
 
+def _load_scanned_files():
+    """Load previously-scanned file paths from JSONL or JSON into _seen_files for cross-session dedup."""
+    # 1. Read the primary JSONL file (line-by-line)
+    if os.path.exists(SCANNED_FILES_JSONL):
+        with open(SCANNED_FILES_JSONL, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rec = json.loads(line)
+                        fp = rec.get("file")
+                        if fp:
+                            _seen_files.add(fp)
+                    except json.JSONDecodeError:
+                        continue
+
+    # 2. Automatically generate the .json extension path from the JSONL variable
+    base_path, _ = os.path.splitext(SCANNED_FILES_JSONL)
+    alternative_json_path = base_path + ".json"
+
+    # 3. Read the standard JSON file if it exists
+    if os.path.exists(alternative_json_path):
+        with open(alternative_json_path, "r", encoding="utf-8") as f:
+            try:
+                records_json = json.load(f)
+                if isinstance(records_json, list):
+                    for rec in records_json:
+                        fp = rec.get("file")
+                        if fp:
+                            _seen_files.add(fp)
+            except json.JSONDecodeError:
+                pass
 
 def _file_sha256(filepath: str) -> str:
     """Compute SHA-256 hash of file contents."""
@@ -794,24 +825,31 @@ _SS58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
+_BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
 def _b58encode_custom(data: bytes, alphabet: str) -> str:
     """Base58 encode with an arbitrary 58-char alphabet (handles leading zeros)."""
-    a = alphabet.encode("ascii")
     if not data:
         return ""
+    
+    a = alphabet.encode("ascii")
     n = int.from_bytes(data, "big")
+    
+    # Count leading zero bytes for padding
     pad = 0
     for b in data:
         if b == 0:
             pad += 1
         else:
             break
+            
     chars = []
     if n > 0:
         while n > 0:
             n, rem = divmod(n, 58)
             chars.append(a[rem])
         chars.reverse()
+        
     return (bytes(a[0:1]) * pad + bytes(chars)).decode("ascii")
 
 
@@ -843,11 +881,53 @@ def _bech32_polymod(values):
 
 
 def _bech32_encode(hrp: str, data_bytes: bytes) -> str:
+    """
+    Encode raw bytes into a standard BIP-173 Bech32 string.
+
+    Example HRPs:
+        "bc"   - Bitcoin mainnet
+        "tb"   - Bitcoin testnet
+        "bcrt" - Bitcoin regtest
+    """
+    if not hrp:
+        raise ValueError("Bech32 HRP cannot be empty")
+
+    hrp = hrp.lower()
+
+    # Convert 8-bit input bytes into 5-bit Bech32 data values.
     data = _bech32_convertbits(data_bytes, 8, 5, True)
-    values = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data
-    polymod = _bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
-    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
-    return hrp + "1" + "".join(_BECH32_CHARSET[d] for d in data + checksum)
+
+    if data is None:
+        raise ValueError("Unable to convert input bytes to Bech32 5-bit groups")
+
+    # Bech32 HRP expansion:
+    #   high 3 bits of each HRP character
+    #   one zero separator
+    #   low 5 bits of each HRP character
+    hrp_high = [ord(char) >> 5 for char in hrp]
+    hrp_low = [ord(char) & 31 for char in hrp]
+
+    values = hrp_high + [0] + hrp_low + data
+
+    # Bech32 checksum is computed over the expanded HRP, data,
+    # and six trailing zero 5-bit values.
+    polymod = _bech32_polymod(values + [0] * 6) ^ 1
+
+    checksum = [
+        (polymod >> (5 * (5 - index))) & 31
+        for index in range(6)
+    ]
+
+    encoded_data = data + checksum
+
+    return (
+        hrp
+        + "1"
+        + "".join(_BECH32_CHARSET[value] for value in encoded_data)
+    )
+
+
+
 
 
 def _xrp_address(pub: bytes) -> str:
@@ -1573,27 +1653,28 @@ class ScannerEngine:
                                         chain=chain, balance=bal, address=addr)
 
                     # ── PERMANENT VAULT: write consolidated record for funded keys ──
+                    # Build funded entries from the balances just computed for THIS key
+                    # (held in `collected`), NOT by re-reading the whole
+                    # balance_records.jsonl. That file grows without bound, and
+                    # re-parsing it once per key is O(keys x total records): when the
+                    # first file contains thousands of keys the scan never advances past
+                    # it. Use the in-memory results instead.
                     funded_entries = []
                     total_vault_usd = Decimal("0")
-                    # Re-read all balances just written for this key
-                    all_recs = jsonl_read_all(BALANCE_JSONL)
-                    key_file = rel_path
-                    for rec in all_recs:
-                        if rec.get("file") == key_file and rec.get("type") == "BALANCE":
-                            bal_str = rec.get("balance", "0")
-                            try:
-                                bal_dec = Decimal(bal_str)
-                            except Exception:
-                                bal_dec = Decimal("0")
-                            if bal_dec > Decimal("0"):
-                                usd_dec = Decimal(rec.get("usd", "0"))
-                                funded_entries.append({
-                                    "chain": rec.get("chain", "?"),
-                                    "address": rec.get("address", "?"),
-                                    "balance": bal_str,
-                                    "usd": str(usd_dec),
-                                })
-                                total_vault_usd += usd_dec
+                    for chain, addr, bal in collected:
+                        try:
+                            bal_dec = Decimal(str(bal))
+                        except Exception:
+                            bal_dec = Decimal("0")
+                        if bal_dec > Decimal("0"):
+                            usd_dec = bal_dec * get_usd_price(chain)
+                            funded_entries.append({
+                                "chain": chain,
+                                "address": addr,
+                                "balance": str(bal_dec),
+                                "usd": str(usd_dec),
+                            })
+                            total_vault_usd += usd_dec
                     if funded_entries:
                         vault_record = {
                             "type": "VAULT",
@@ -2126,8 +2207,10 @@ class App(ttk.Frame):
         if not self.active_folder and not self.active_file:
             return
 
-        # Reset dedup keys for this scan session
+        # Reset dedup state for this scan session
         _seen_keys.clear()
+        _seen_files.clear()
+        _file_hashes.clear()
 
         self.btn_scan.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
