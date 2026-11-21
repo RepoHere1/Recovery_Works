@@ -1,0 +1,6 @@
+requests
+cryptography
+bip_utils
+mnemonic
+base58
+solders

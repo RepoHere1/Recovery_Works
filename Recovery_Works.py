@@ -32,12 +32,15 @@ getcontext().prec = 50
 
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from bip_utils import (
-    Bip39SeedGenerator, Bip39MnemonicValidator, Bip39MnemonicGenerator,
-    Bip44, Bip44Coins, Bip49, Bip49Coins, Bip84, Bip84Coins,
-    Bip32Slip10Ed25519, Bip32Secp256k1,
-    Bip44Changes, Bip44Levels
-)
+try:
+    from bip_utils import (
+        Bip39SeedGenerator, Bip39MnemonicValidator, Bip39MnemonicGenerator,
+        Bip44, Bip44Coins, Bip49, Bip49Coins, Bip84, Bip84Coins,
+        Bip32Slip10Ed25519, Bip32Secp256k1,
+        Bip44Changes, Bip44Levels
+    )
+except ImportError:
+    pass
 from mnemonic import Mnemonic
 import base58
 from solders.keypair import Keypair as SolKeypair
@@ -46,7 +49,10 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-_ = Bip44Levels, Bip44Changes
+try:
+    _ = Bip44Levels, Bip44Changes
+except NameError:
+    pass
 
 # ═══════════════════════════════════════════════════════════════
 # LOAD .ENV – REAL API KEYS FROM .ENV, NO FAKES

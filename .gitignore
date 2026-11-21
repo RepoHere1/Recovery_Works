@@ -6,3 +6,5 @@ __pycache__/
 recovered_portfolio.csv
 Scripts/check_imports.py
 .env
+*.log
+_pip*.log
