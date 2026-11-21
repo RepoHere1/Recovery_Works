@@ -329,7 +329,7 @@ def _read_file_text(filepath: str) -> Optional[str]:
             continue
     return None
 
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_FILE_SIZE = 512 * 1024 * 1024  # 512MB - phrase logs are plain text and can be huge (349MB+); must be scanned, not skipped
 TEXT_EXTENSIONS = {
     ".txt", ".md", ".cfg", ".conf", ".ini", ".env", ".json",
     ".yml", ".yaml", ".xml", ".csv", ".log", ".dat", ".wallet",
@@ -409,6 +409,25 @@ def detect_bip39(text: str):
             return phrase
     return None
 
+def _bip39_phrases_in_line(line: str):
+    """All checksum-valid BIP39 phrases found in ONE line (whole-line + chunk split)."""
+    stripped = line.strip()
+    if not stripped:
+        return []
+    found = []
+    result = detect_bip39(stripped)
+    if result:
+        found.append(result)
+    chunks = re.split(r'[;,:|"\'{}\[\]()=]+', stripped)
+    for chunk in chunks:
+        chunk = chunk.strip().strip('"').strip("'")
+        if not chunk:
+            continue
+        result = detect_bip39(chunk)
+        if result:
+            found.append(result)
+    return found
+
 def detect_bip39_in_text(text: str):
     lines = text.replace("\r\n", "\n").split("\n")
     for line in lines:
@@ -425,6 +444,22 @@ def detect_bip39_in_text(text: str):
             if result:
                 return result
     return None
+
+def detect_bip39_all_in_text(text: str):
+    """Return ALL unique checksum-valid BIP39 phrases found in the text.
+
+    A single log file can contain hundreds of thousands of phrases
+    (one per JSONL record); the old first-match-only behaviour
+    reported the whole file as 1 key.
+    """
+    found = []
+    seen = set()
+    for line in text.replace("\r\n", "\n").split("\n"):
+        for phrase in _bip39_phrases_in_line(line):
+            if phrase not in seen:
+                seen.add(phrase)
+                found.append(phrase)
+    return found
 
 def detect_pem_keys(text: str):
     pem_regex = re.compile(
@@ -676,9 +711,26 @@ def scan_file_for_keys(filepath: str):
     if text is None:
         return []
 
-    bip39 = detect_bip39_in_text(text)
-    if bip39:
-        results.append(("BIP39", bip39))
+    # BIP39: collect EVERY phrase (files hold thousands of records), and treat
+    # phrase-yielding lines as seed records - their other hex/base64 fields
+    # (entropy, seed, address) describe the SAME wallet, so they must not be
+    # re-detected as RAW-HEX/BASE64 keys (which would derive wrong wallets
+    # and triple the RPC work).
+    bip39_all = []
+    _seen_phrases = set()
+    kept_lines = []
+    for line in text.replace("\r\n", "\n").split("\n"):
+        line_phrases = _bip39_phrases_in_line(line)
+        if line_phrases:
+            for phrase in line_phrases:
+                if phrase not in _seen_phrases:
+                    _seen_phrases.add(phrase)
+                    bip39_all.append(phrase)
+        else:
+            kept_lines.append(line)
+    for phrase in bip39_all:
+        results.append(("BIP39", phrase))
+    text = "\n".join(kept_lines)
 
     pem_matches = detect_pem_keys(text)
     results.extend(pem_matches)
